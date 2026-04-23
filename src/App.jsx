@@ -2670,6 +2670,163 @@ async function routeMessage(msg, addMsg, hudState, showToast, openOverlay) {
   // ── WEATHER ──
   if(/^(what'?s? the weather|how'?s? the weather|weather update|is it raining|weather now)/.test(m)){addMsg("ryn","Checking weather...");const w=await WEATHER_CACHE.fetch();return w?`It's ${w.temp} degrees and ${w.desc.toLowerCase()} in ${w.city}. Feels like ${w.feels} degrees, humidity ${w.humidity} percent.`:"Can't fetch weather right now.";}
 
+  // ── TRADINGVIEW STOCK CHART — universal, works for ALL 8000+ NSE/BSE stocks ──
+  {
+    // ── STEP 1: Detect stock intent ──
+    // Triggers on any price/chart/position/status query
+    const stockIntentRe = /\b(stock|stocks|share|shares|equity|price|prices|position|chart|charts|today'?s? price|current price|rate|trading|traded|listed|status|performance|levels?|target|support|resistance|analyse|analyze|analysis|technical|fundamentals?|52.?week|high|low|volume|market cap|ipo|nse|bse|sensex|nifty|banknifty)\b/i;
+    // Also catch natural phrasings: "how is X today", "what is X doing", "X price today", "open X chart"
+    const naturalStockRe = /\b(how is|how'?s?|what is|what'?s?|show me|open|check|get me|give me|pull up|look up)\b.{1,40}\b(today|now|currently|doing|going|trading|price|chart|position|status)\b/i;
+    const isStockQuery = stockIntentRe.test(m) || naturalStockRe.test(m);
+
+    if (isStockQuery) {
+      // ── STEP 2: Small alias map — only for names that differ from their ticker ──
+      // e.g. "reliance power" → "RPOWER", "state bank" → "SBIN"
+      // For everything else (all 8000+ stocks), the cleaned name IS the ticker
+      const ALIAS = {
+        // Name aliases that don't match their ticker directly
+        "reliance power":"RPOWER","rpower":"RPOWER",
+        "reliance industries":"RELIANCE","reliance":"RELIANCE","ril":"RELIANCE",
+        "tata consultancy services":"TCS","tata consultancy":"TCS",
+        "tata motors":"TATAMOTORS","tata motor":"TATAMOTORS",
+        "tata steel":"TATASTEEL","tata power":"TATAPOWER",
+        "state bank of india":"SBIN","state bank":"SBIN","sbi":"SBIN",
+        "hdfc bank":"HDFCBANK","hdfc":"HDFCBANK",
+        "hdfc life insurance":"HDFCLIFE","hdfc life":"HDFCLIFE",
+        "icici bank":"ICICIBANK","icici":"ICICIBANK",
+        "axis bank":"AXISBANK","kotak mahindra bank":"KOTAKBANK","kotak bank":"KOTAKBANK","kotak mahindra":"KOTAKBANK","kotak":"KOTAKBANK",
+        "punjab national bank":"PNB","bank of baroda":"BANKBARODA","canara bank":"CANBK",
+        "idfc first bank":"IDFCFIRSTB","idfc first":"IDFCFIRSTB","idfc":"IDFCFIRSTB",
+        "bandhan bank":"BANDHANBNK",
+        "infosys":"INFY","infy":"INFY",
+        "hcl technologies":"HCLTECH","hcl tech":"HCLTECH","hcl":"HCLTECH",
+        "tech mahindra":"TECHM","techmahindra":"TECHM",
+        "lti mindtree":"LTIM","ltimindtree":"LTIM","lti":"LTIM",
+        "maruti suzuki":"MARUTI","maruti":"MARUTI",
+        "bajaj auto":"BAJAJ-AUTO",
+        "hero motocorp":"HEROMOTOCO","hero moto":"HEROMOTOCO","hero":"HEROMOTOCO",
+        "mahindra and mahindra":"M%26M","mahindra":"M%26M","m&m":"M%26M",
+        "eicher motors":"EICHERMOT","royal enfield":"EICHERMOT","eicher":"EICHERMOT",
+        "tvs motor":"TVSMOTOR","tvs motors":"TVSMOTOR",
+        "adani enterprises":"ADANIENT","adani enterprise":"ADANIENT",
+        "adani green energy":"ADANIGREEN","adani green":"ADANIGREEN",
+        "adani ports":"ADANIPORTS","adani total gas":"ATGL",
+        "adani power":"ADANIPOWER","adani wilmar":"AWL",
+        "power grid":"POWERGRID","power grid corporation":"POWERGRID",
+        "oil and natural gas":"ONGC","oil india":"OIL","indian oil":"IOC",
+        "bharat petroleum":"BPCL","hindustan petroleum":"HINDPETRO",
+        "coal india":"COALINDIA",
+        "sun pharmaceutical":"SUNPHARMA","sun pharma":"SUNPHARMA",
+        "dr reddys":"DRREDDY","dr reddy":"DRREDDY","dr. reddy":"DRREDDY","dr. reddys":"DRREDDY",
+        "divis laboratories":"DIVISLAB","divis lab":"DIVISLAB","divis":"DIVISLAB","divi":"DIVISLAB",
+        "aurobindo pharma":"AUROPHARMA","aurobindo":"AUROPHARMA",
+        "torrent pharmaceuticals":"TORNTPHARM","torrent pharma":"TORNTPHARM",
+        "hindustan unilever":"HINDUNILVR","hul":"HINDUNILVR",
+        "godrej consumer":"GODREJCP","godrej consumer products":"GODREJCP",
+        "nestle india":"NESTLEIND","nestle":"NESTLEIND",
+        "avenue supermarts":"DMART","dmart":"DMART",
+        "nykaa":"FSN","fsn ecommerce":"FSN",
+        "one97 communications":"PAYTM","paytm":"PAYTM",
+        "bharti airtel":"BHARTIARTL","airtel":"BHARTIARTL",
+        "vodafone idea":"IDEA","vodafone":"IDEA",
+        "bajaj finance":"BAJFINANCE","bajaj fin":"BAJFINANCE",
+        "bajaj finserv":"BAJAJFINSV",
+        "lic of india":"LICI","life insurance corporation":"LICI","lic":"LICI",
+        "muthoot finance":"MUTHOOTFIN","muthoot":"MUTHOOTFIN",
+        "cholamandalam investment":"CHOLAFIN","cholamandalam":"CHOLAFIN","chola":"CHOLAFIN",
+        "ultratech cement":"ULTRACEMCO","ultratech":"ULTRACEMCO","ultracemco":"ULTRACEMCO",
+        "shree cement":"SHREECEM",
+        "ambuja cements":"AMBUJACEM","ambuja cement":"AMBUJACEM","ambuja":"AMBUJACEM",
+        "jsw steel":"JSWSTEEL",
+        "steel authority of india":"SAIL","sail":"SAIL",
+        "hindustan aeronautics":"HAL",
+        "bharat heavy electricals":"BHEL","bharat heavy":"BHEL",
+        "indian railway finance":"IRFC",
+        "rail vikas nigam":"RVNL","rail vikas":"RVNL",
+        // Indices — special handling
+        "nifty 50":"NSE:NIFTY50","nifty50":"NSE:NIFTY50","nifty":"NSE:NIFTY50",
+        "sensex":"BSE:SENSEX","bse sensex":"BSE:SENSEX",
+        "bank nifty":"NSE:BANKNIFTY","banknifty":"NSE:BANKNIFTY",
+        "nifty bank":"NSE:BANKNIFTY","nifty it":"NSE:CNXIT","nifty pharma":"NSE:CNXPHARMA",
+        "nifty midcap":"NSE:NIFTY_MIDCAP_100","nifty smallcap":"NSE:NIFTY_SMALLCAP_100",
+        // Crypto
+        "bitcoin":"BINANCE:BTCUSDT","btc":"BINANCE:BTCUSDT",
+        "ethereum":"BINANCE:ETHUSDT","eth":"BINANCE:ETHUSDT",
+        "solana":"BINANCE:SOLUSDT","sol":"BINANCE:SOLUSDT",
+        "bnb":"BINANCE:BNBUSDT","xrp":"BINANCE:XRPUSDT","ripple":"BINANCE:XRPUSDT",
+        "dogecoin":"BINANCE:DOGEUSDT","doge":"BINANCE:DOGEUSDT",
+        // US stocks (common ones people ask about)
+        "apple":"NASDAQ:AAPL","aapl":"NASDAQ:AAPL",
+        "microsoft":"NASDAQ:MSFT","msft":"NASDAQ:MSFT",
+        "google":"NASDAQ:GOOGL","alphabet":"NASDAQ:GOOGL","googl":"NASDAQ:GOOGL",
+        "amazon":"NASDAQ:AMZN","amzn":"NASDAQ:AMZN",
+        "tesla":"NASDAQ:TSLA","tsla":"NASDAQ:TSLA",
+        "nvidia":"NASDAQ:NVDA","nvda":"NASDAQ:NVDA",
+        "meta":"NASDAQ:META","facebook":"NASDAQ:META",
+      };
+
+      // ── STEP 3: Extract stock name from the message ──
+      // Strip all filler words — what remains is the stock name/ticker
+      const FILLER = [
+        "hey ryan","ok ryan","ryan","hey","what is","what's","what are","how is","how's",
+        "tell me","show me","open","check","get me","give me","pull up","look up","find",
+        "the position of","position of","the price of","price of","the chart of","chart of",
+        "the chart for","chart for","the status of","status of","the status for",
+        "today's price","today price","current price","current status","current position",
+        "todays price","todays status",
+        "price today","chart today","position today","status today",
+        "stock price","share price","stock chart","share chart",
+        "on nse","on bse","listed on nse","listed on bse","nse listed","bse listed",
+        "stock","stocks","share","shares","equity","today","now","currently",
+        "doing","going","trading at","price","chart","position","status","performance",
+        "analysis","analyse","analyze","technical","fundamentals",
+        "please","can you","could you","would you","i want to see","i want to know",
+        "for me","right now","at present","at the moment","this moment"
+      ].sort((a,b) => b.length - a.length); // longest-first so multi-word phrases strip first
+
+      let cleaned = m;
+      for (const f of FILLER) {
+        const re = new RegExp(`\\b${f.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")}\\b`,"gi");
+        cleaned = cleaned.replace(re, " ");
+      }
+      cleaned = cleaned.replace(/[?!.,]/g,"").replace(/\s{2,}/g," ").trim();
+
+      if (!cleaned || cleaned.length < 2) return null; // nothing left after stripping
+
+      // ── STEP 4: Match against alias map (longest match wins) ──
+      let tvSymbol = null, displayName = cleaned.toUpperCase();
+      const cleanedLower = cleaned.toLowerCase();
+      const sortedAliases = Object.keys(ALIAS).sort((a,b) => b.length - a.length);
+      for (const alias of sortedAliases) {
+        if (cleanedLower.includes(alias)) {
+          const val = ALIAS[alias];
+          // If already fully qualified (has : like NSE:NIFTY50 or BINANCE:BTC) use as-is
+          tvSymbol = val.includes(":") ? val : `NSE:${val}`;
+          displayName = alias.toUpperCase();
+          break;
+        }
+      }
+
+      // ── STEP 5: Fallback — treat the cleaned text as the ticker directly ──
+      // This handles ALL 8000+ NSE/BSE stocks with no hardcoding needed
+      if (!tvSymbol) {
+        // Convert to uppercase, remove spaces → becomes the NSE ticker
+        const ticker = cleaned.toUpperCase().replace(/\s+/g,"-").replace(/[^A-Z0-9&\-]/g,"");
+        if (ticker.length >= 2) {
+          tvSymbol = `NSE:${ticker}`;
+          displayName = ticker;
+        }
+      }
+
+      // ── STEP 6: Open TradingView instantly, no questions asked ──
+      if (tvSymbol) {
+        const tvUrl = `https://in.tradingview.com/chart/?symbol=${tvSymbol}`;
+        window.open(tvUrl, "_blank");
+        return `On it! Opening the live TradingView chart for ${displayName} right now. Check the tab for the current price, volume, and all technical levels!`;
+      }
+    }
+  }
+
   // ── CURRENCY (offline estimate) ──
   if(/convert\s+[\d.]+\s+(usd|inr|eur|gbp|aed|sgd|jpy|aud|cad)/i.test(m)){
     const cx=m.match(/convert\s+([\d.]+)\s+(\w+)\s+to\s+(\w+)/i);
