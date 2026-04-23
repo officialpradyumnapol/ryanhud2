@@ -7079,7 +7079,7 @@ export default function RyanHUD() {
 
   return (
     <div style={{position:"relative",width:"100vw",height:"100vh",overflow:"hidden",userSelect:"none",fontFamily:'"Courier New",monospace',backgroundColor:"#000"}}>
-      <div style={{position:"fixed",inset:0,backgroundImage:`url('${BG_IMG}')`,backgroundSize:"cover",backgroundPosition:"calc(50% - 4px) calc(50% + 12px)",backgroundRepeat:"no-repeat",filter:"brightness(1.3)",zIndex:0,pointerEvents:"none"}}/>
+      <div style={{position:"fixed",inset:0,backgroundImage:`url('${BG_IMG}')`,backgroundSize:"cover",backgroundPosition:"calc(50% - 4px) calc(50% + 12px)",backgroundRepeat:"no-repeat",filter:"brightness(1.2) contrast(1.1) saturate(1.1)",zIndex:0,pointerEvents:"none"}}/>
       <canvas ref={canvasRef} style={{position:"fixed",top:0,left:0,width:"100vw",height:"100vh",cursor:"crosshair"}} onClick={handleCanvasClick}/>
 
       {/* ── CHAT ── */}
