@@ -5115,14 +5115,475 @@ function ChartTab({ defaultSymbol = "NSE:NIFTY" }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   MARKET TAB — Overview + Calendar
+   FINNHUB LIVE MARKET — Full live stock data via Finnhub API
 ═══════════════════════════════════════════════════════════════ */
-function MarketTab() {
-  const [view, setView] = useState("overview");
+const FINNHUB_WATCHLIST = [
+  // Indian Indices (Yahoo-compatible via Finnhub)
+  { sym: "NIFTY50.NS",   label: "NIFTY 50",      cat: "🇮🇳 Indices" },
+  { sym: "RELIANCE.NS",  label: "Reliance",       cat: "🇮🇳 NSE" },
+  { sym: "TCS.NS",       label: "TCS",            cat: "🇮🇳 NSE" },
+  { sym: "HDFCBANK.NS",  label: "HDFC Bank",      cat: "🇮🇳 NSE" },
+  { sym: "ICICIBANK.NS", label: "ICICI Bank",     cat: "🇮🇳 NSE" },
+  { sym: "INFY.NS",      label: "Infosys",        cat: "🇮🇳 NSE" },
+  { sym: "SBIN.NS",      label: "SBI",            cat: "🇮🇳 NSE" },
+  { sym: "WIPRO.NS",     label: "Wipro",          cat: "🇮🇳 NSE" },
+  { sym: "TATAMOTORS.NS",label: "Tata Motors",    cat: "🇮🇳 NSE" },
+  { sym: "BAJFINANCE.NS",label: "Bajaj Finance",  cat: "🇮🇳 NSE" },
+  // US Stocks
+  { sym: "AAPL",  label: "Apple",    cat: "🇺🇸 US" },
+  { sym: "MSFT",  label: "Microsoft",cat: "🇺🇸 US" },
+  { sym: "GOOGL", label: "Google",   cat: "🇺🇸 US" },
+  { sym: "TSLA",  label: "Tesla",    cat: "🇺🇸 US" },
+  { sym: "NVDA",  label: "NVIDIA",   cat: "🇺🇸 US" },
+  { sym: "AMZN",  label: "Amazon",   cat: "🇺🇸 US" },
+  { sym: "META",  label: "Meta",     cat: "🇺🇸 US" },
+  // Crypto
+  { sym: "BINANCE:BTCUSDT", label: "BTC/USDT", cat: "₿ Crypto" },
+  { sym: "BINANCE:ETHUSDT", label: "ETH/USDT", cat: "₿ Crypto" },
+  // Forex
+  { sym: "OANDA:USD_INR", label: "USD/INR", cat: "💱 Forex" },
+];
+
+function FinnhubLiveMarket({ apiKey }) {
+  const [quotes, setQuotes] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [searchSym, setSearchSym] = useState("");
+  const [searchResult, setSearchResult] = useState(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [news, setNews] = useState([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [activeView, setActiveView] = useState("watchlist");
+  const [filterCat, setFilterCat] = useState("All");
+  const [candleData, setCandleData] = useState(null);
+  const [selectedSym, setSelectedSym] = useState(null);
+
+  const BASE = "https://finnhub.io/api/v1";
+
+  const fetchQuote = async (sym) => {
+    try {
+      const r = await fetch(`${BASE}/quote?symbol=${encodeURIComponent(sym)}&token=${apiKey}`, { signal: AbortSignal.timeout(8000) });
+      const d = await r.json();
+      if (d.c && d.c > 0) return { c: d.c, d: d.d, dp: d.dp, h: d.h, l: d.l, o: d.o, pc: d.pc };
+    } catch {}
+    return null;
+  };
+
+  const fetchAllQuotes = async () => {
+    setLoading(true);
+    const results = {};
+    // Batch in groups of 5 to avoid rate limit
+    const chunks = [];
+    for (let i = 0; i < FINNHUB_WATCHLIST.length; i += 5) chunks.push(FINNHUB_WATCHLIST.slice(i, i + 5));
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async (s) => {
+        const q = await fetchQuote(s.sym);
+        if (q) results[s.sym] = q;
+      }));
+      await new Promise(r => setTimeout(r, 300)); // small delay between chunks
+    }
+    setQuotes(results);
+    setLastUpdated(new Date());
+    setLoading(false);
+  };
+
+  const searchStock = async () => {
+    if (!searchSym.trim()) return;
+    setSearchLoading(true);
+    setSearchResult(null);
+    const sym = searchSym.trim().toUpperCase();
+    const q = await fetchQuote(sym);
+    if (q) {
+      setSearchResult({ sym, ...q });
+      // Also fetch candles for 30 days
+      try {
+        const to = Math.floor(Date.now() / 1000);
+        const from = to - 30 * 86400;
+        const r = await fetch(`${BASE}/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`);
+        const d = await r.json();
+        if (d.s === "ok" && d.c?.length) {
+          const data = d.t.map((ts, i) => ({
+            date: new Date(ts * 1000).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+            close: d.c[i], open: d.o[i], high: d.h[i], low: d.l[i], volume: d.v[i],
+          }));
+          setCandleData({ sym, data });
+          setSelectedSym(sym);
+        }
+      } catch {}
+    } else {
+      setSearchResult({ sym, error: "Symbol not found or no data available." });
+    }
+    setSearchLoading(false);
+  };
+
+  const fetchNews = async () => {
+    setNewsLoading(true);
+    try {
+      const r = await fetch(`${BASE}/news?category=general&minId=0&token=${apiKey}`, { signal: AbortSignal.timeout(8000) });
+      const d = await r.json();
+      if (Array.isArray(d)) setNews(d.slice(0, 20));
+    } catch {}
+    setNewsLoading(false);
+  };
+
+  const fetchCandleForSym = async (sym) => {
+    setSelectedSym(sym);
+    setCandleData(null);
+    try {
+      const to = Math.floor(Date.now() / 1000);
+      const from = to - 30 * 86400;
+      const r = await fetch(`${BASE}/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=D&from=${from}&to=${to}&token=${apiKey}`);
+      const d = await r.json();
+      if (d.s === "ok" && d.c?.length) {
+        const data = d.t.map((ts, i) => ({
+          date: new Date(ts * 1000).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+          close: d.c[i], open: d.o[i], high: d.h[i], low: d.l[i],
+        }));
+        setCandleData({ sym, data });
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (apiKey) {
+      fetchAllQuotes();
+      const iv = setInterval(fetchAllQuotes, 60000);
+      return () => clearInterval(iv);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  useEffect(() => {
+    if (activeView === "news" && news.length === 0 && apiKey) fetchNews();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeView]);
+
+  const cats = ["All", ...Array.from(new Set(FINNHUB_WATCHLIST.map(s => s.cat)))];
+  const filtered = FINNHUB_WATCHLIST.filter(s => filterCat === "All" || s.cat === filterCat);
+
+  const fmt = (n, dp = 2) => n != null ? n.toFixed(dp) : "--";
+  const fmtPrice = (n) => {
+    if (n == null) return "--";
+    if (n >= 1000) return n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+    return n.toFixed(2);
+  };
+
+  const VIEWS = [
+    ["watchlist", "📊 Watchlist"],
+    ["search",    "🔍 Stock Search"],
+    ["news",      "📰 Market News"],
+  ];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+
+      {/* Header bar */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+        <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 3, border: "1px solid var(--border)" }}>
+          {VIEWS.map(([id, label]) => (
+            <button key={id} onClick={() => setActiveView(id)} style={{
+              padding: "7px 18px", borderRadius: 8, cursor: "pointer",
+              fontFamily: "var(--sans)", fontWeight: 600, fontSize: 12, transition: "all .2s",
+              background: activeView === id ? "rgba(0,212,255,0.12)" : "transparent",
+              color: activeView === id ? "var(--cyan)" : "var(--text-dim)",
+              border: activeView === id ? "1px solid rgba(0,212,255,0.25)" : "1px solid transparent",
+            }}>{label}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {lastUpdated && (
+            <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)" }}>
+              Updated {lastUpdated.toLocaleTimeString("en-IN")}
+            </span>
+          )}
+          <button className="btn-ghost" onClick={fetchAllQuotes} disabled={loading} style={{ fontSize: 11, padding: "6px 14px" }}>
+            {loading ? "⟳ Refreshing..." : "⟳ Refresh"}
+          </button>
+          <div style={{ background: "rgba(0,212,255,0.08)", border: "1px solid var(--cyan-border)", borderRadius: 8, padding: "5px 12px", fontFamily: "var(--mono)", fontSize: 10, color: "var(--cyan)" }}>
+            ⚡ Finnhub Live
+          </div>
+        </div>
+      </div>
+
+      {/* ── WATCHLIST ── */}
+      {activeView === "watchlist" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Category filter */}
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {cats.map(cat => (
+              <button key={cat} onClick={() => setFilterCat(cat)} style={{
+                padding: "4px 14px", borderRadius: 20, cursor: "pointer", fontSize: 11,
+                fontFamily: "var(--sans)", fontWeight: 500, transition: "all .15s",
+                background: filterCat === cat ? "rgba(0,212,255,0.14)" : "rgba(255,255,255,0.04)",
+                color: filterCat === cat ? "var(--cyan)" : "var(--text-dim)",
+                border: filterCat === cat ? "1px solid rgba(0,212,255,0.3)" : "1px solid var(--border)",
+              }}>{cat}</button>
+            ))}
+          </div>
+
+          {/* Loading skeleton */}
+          {loading && Object.keys(quotes).length === 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {[1,2,3,4,5].map(i => (
+                <div key={i} style={{ height: 56, borderRadius: 10, background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", animation: "pulse 1.5s ease infinite" }} />
+              ))}
+              <div style={{ textAlign: "center", fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", paddingTop: 8 }}>
+                Fetching live quotes from Finnhub...
+              </div>
+            </div>
+          )}
+
+          {/* Quotes table */}
+          {Object.keys(quotes).length > 0 && (
+            <div className="glass-card" style={{ padding: 0, overflow: "hidden" }}>
+              {/* Table header */}
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1fr 1fr 1fr 1fr", padding: "10px 18px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+                {["Symbol", "Last Price", "Change", "Change %", "High", "Low", "Prev Close"].map(h => (
+                  <div key={h} style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, textTransform: "uppercase" }}>{h}</div>
+                ))}
+              </div>
+
+              {filtered.map((s) => {
+                const q = quotes[s.sym];
+                const isUp = q ? q.dp >= 0 : null;
+                const col = isUp === null ? "var(--text-dim)" : isUp ? "var(--green)" : "var(--red)";
+                return (
+                  <div
+                    key={s.sym}
+                    onClick={() => fetchCandleForSym(s.sym)}
+                    style={{
+                      display: "grid", gridTemplateColumns: "2fr 1.4fr 1fr 1fr 1fr 1fr 1fr",
+                      padding: "12px 18px", borderBottom: "1px solid rgba(255,255,255,0.03)",
+                      cursor: "pointer", transition: "background .15s",
+                      background: selectedSym === s.sym ? "rgba(0,212,255,0.06)" : "transparent",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+                    onMouseLeave={e => e.currentTarget.style.background = selectedSym === s.sym ? "rgba(0,212,255,0.06)" : "transparent"}
+                  >
+                    <div>
+                      <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: "var(--text)" }}>{s.label}</div>
+                      <div style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>{s.cat} · {s.sym}</div>
+                    </div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color: q ? col : "var(--text-dim)", display: "flex", alignItems: "center" }}>
+                      {q ? fmtPrice(q.c) : <span style={{ opacity: .3 }}>---</span>}
+                    </div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: col, display: "flex", alignItems: "center" }}>
+                      {q ? (q.d >= 0 ? "+" : "") + fmt(q.d) : "---"}
+                    </div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: col, display: "flex", alignItems: "center", gap: 4 }}>
+                      {q ? (
+                        <span style={{ background: isUp ? "rgba(14,204,109,0.1)" : "rgba(240,64,96,0.1)", padding: "2px 8px", borderRadius: 5, border: `1px solid ${isUp ? "rgba(14,204,109,0.2)" : "rgba(240,64,96,0.2)"}` }}>
+                          {q.dp >= 0 ? "▲" : "▼"} {Math.abs(q.dp).toFixed(2)}%
+                        </span>
+                      ) : "---"}
+                    </div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-mid)", display: "flex", alignItems: "center" }}>{q ? fmtPrice(q.h) : "---"}</div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-mid)", display: "flex", alignItems: "center" }}>{q ? fmtPrice(q.l) : "---"}</div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", display: "flex", alignItems: "center" }}>{q ? fmtPrice(q.pc) : "---"}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Candle Chart for selected symbol */}
+          {candleData && (
+            <div className="glass-card fade-up">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+                <div>
+                  <span style={{ fontFamily: "var(--serif)", fontSize: 18, fontStyle: "italic", color: "var(--text)" }}>{candleData.sym}</span>
+                  <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", marginLeft: 10, letterSpacing: 2 }}>30-DAY PRICE HISTORY (DAILY)</span>
+                </div>
+                <button className="btn-ghost" onClick={() => { setCandleData(null); setSelectedSym(null); }} style={{ fontSize: 11 }}>✕ Close</button>
+              </div>
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={candleData.data} margin={{ top: 4, right: 10, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="fhGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#00d4ff" stopOpacity={0.18} />
+                      <stop offset="95%" stopColor="#00d4ff" stopOpacity={0.01} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="date" tick={{ fill: "var(--text-dim)", fontSize: 9 }} interval={4} />
+                  <YAxis tick={{ fill: "var(--text-dim)", fontSize: 9 }} domain={["auto", "auto"]} width={60} />
+                  <Tooltip
+                    contentStyle={{ background: "rgba(3,3,9,0.95)", border: "1px solid rgba(0,212,255,0.2)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11 }}
+                    itemStyle={{ color: "var(--cyan)" }}
+                    formatter={(v) => [fmtPrice(v), "Close"]}
+                  />
+                  <Area type="monotone" dataKey="close" stroke="#00d4ff" fill="url(#fhGrad)" strokeWidth={2} dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+              {/* OHLC summary */}
+              {candleData.data.length > 0 && (() => {
+                const last = candleData.data[candleData.data.length - 1];
+                const first = candleData.data[0];
+                const chg = ((last.close - first.close) / first.close * 100).toFixed(2);
+                const isUp = parseFloat(chg) >= 0;
+                return (
+                  <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+                    {[["Open", last.open], ["High", last.high], ["Low", last.low], ["Close", last.close]].map(([l, v]) => (
+                      <div key={l} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "8px 14px", minWidth: 80, textAlign: "center" }}>
+                        <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, textTransform: "uppercase" }}>{l}</div>
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--text)", fontWeight: 600, marginTop: 4 }}>{fmtPrice(v)}</div>
+                      </div>
+                    ))}
+                    <div style={{ background: isUp ? "rgba(14,204,109,0.08)" : "rgba(240,64,96,0.08)", border: `1px solid ${isUp ? "rgba(14,204,109,0.2)" : "rgba(240,64,96,0.2)"}`, borderRadius: 8, padding: "8px 14px", minWidth: 100, textAlign: "center" }}>
+                      <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>30D RETURN</div>
+                      <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: isUp ? "var(--green)" : "var(--red)", fontWeight: 700, marginTop: 4 }}>{isUp ? "+" : ""}{chg}%</div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── SEARCH ── */}
+      {activeView === "search" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 700 }}>
+          <div className="glass-card">
+            <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 3, textTransform: "uppercase", marginBottom: 12 }}>
+              Search Any Stock / Crypto / Forex — Finnhub Symbol Format
+            </div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <input
+                placeholder="e.g. AAPL · TSLA · RELIANCE.NS · BINANCE:BTCUSDT · OANDA:USD_INR"
+                value={searchSym}
+                onChange={e => setSearchSym(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && searchStock()}
+                style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 13 }}
+              />
+              <button className="btn-gold" onClick={searchStock} disabled={searchLoading || !searchSym.trim()} style={{ flexShrink: 0 }}>
+                {searchLoading ? "Loading..." : "🔍 Get Quote"}
+              </button>
+            </div>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", marginTop: 8, opacity: .6 }}>
+              NSE stocks: RELIANCE.NS · BSE: use BSE:500325 · US: AAPL · Crypto: BINANCE:BTCUSDT
+            </div>
+          </div>
+
+          {searchResult && !searchResult.error && (
+            <div className="glass-card-cyan fade-up">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 14 }}>
+                <div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 22, fontWeight: 700, color: "var(--text)", letterSpacing: -.3 }}>{searchResult.sym}</div>
+                  <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", marginTop: 4, letterSpacing: 2 }}>REAL-TIME QUOTE · FINNHUB</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 32, fontWeight: 700, color: searchResult.dp >= 0 ? "var(--green)" : "var(--red)", lineHeight: 1 }}>
+                    {fmtPrice(searchResult.c)}
+                  </div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 14, color: searchResult.dp >= 0 ? "var(--green)" : "var(--red)", marginTop: 6 }}>
+                    {searchResult.dp >= 0 ? "▲" : "▼"} {Math.abs(searchResult.dp).toFixed(2)}%
+                    <span style={{ marginLeft: 8, fontSize: 12, opacity: .7 }}>({searchResult.d >= 0 ? "+" : ""}{fmt(searchResult.d)})</span>
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 10, marginTop: 16 }}>
+                {[["Open", searchResult.o], ["High", searchResult.h], ["Low", searchResult.l], ["Prev Close", searchResult.pc]].map(([l, v]) => (
+                  <div key={l} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "10px 14px", textAlign: "center" }}>
+                    <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>{l}</div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 14, color: "var(--text)", fontWeight: 600, marginTop: 5 }}>{fmtPrice(v)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {searchResult?.error && (
+            <div className="glass-card" style={{ borderColor: "var(--red)", color: "var(--red)", fontFamily: "var(--mono)", fontSize: 12 }}>
+              ⚠ {searchResult.error}
+            </div>
+          )}
+
+          {/* 30-day chart for searched symbol */}
+          {candleData && candleData.sym === searchResult?.sym && (
+            <div className="glass-card fade-up">
+              <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, marginBottom: 12 }}>30-DAY DAILY CHART · {candleData.sym}</div>
+              <ResponsiveContainer width="100%" height={200}>
+                <AreaChart data={candleData.data}>
+                  <defs>
+                    <linearGradient id="fhGrad2" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#e8b84b" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#e8b84b" stopOpacity={0.01} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                  <XAxis dataKey="date" tick={{ fill: "var(--text-dim)", fontSize: 9 }} interval={4} />
+                  <YAxis tick={{ fill: "var(--text-dim)", fontSize: 9 }} domain={["auto","auto"]} width={60} />
+                  <Tooltip contentStyle={{ background: "#030309", border: "1px solid rgba(232,184,75,0.25)", borderRadius: 8, fontFamily: "var(--mono)", fontSize: 11 }} />
+                  <Area type="monotone" dataKey="close" stroke="var(--gold)" fill="url(#fhGrad2)" strokeWidth={2} dot={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── MARKET NEWS ── */}
+      {activeView === "news" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase" }}>◈ Global Market News · Finnhub</div>
+            <button className="btn-ghost" onClick={fetchNews} disabled={newsLoading} style={{ fontSize: 11 }}>⟳ Refresh</button>
+          </div>
+          {newsLoading && <div style={{ textAlign: "center", padding: "40px 0", fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>Fetching market news from Finnhub...</div>}
+          {news.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {news.map((n, i) => (
+                <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+                  <div className="fade-up glass-card" style={{ borderLeft: "3px solid var(--gold-border)", padding: "14px 18px", transition: "transform .15s, box-shadow .15s", animationDelay: `${i * 0.04}s` }}
+                    onMouseEnter={e => { e.currentTarget.style.transform = "translateX(4px)"; e.currentTarget.style.borderLeftColor = "var(--cyan)"; }}
+                    onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.borderLeftColor = "var(--gold-border)"; }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--gold)", letterSpacing: 1.2, textTransform: "uppercase", fontWeight: 700 }}>{n.source || "Finnhub"}</span>
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)" }}>
+                        {new Date(n.datetime * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                      </span>
+                      {n.category && <span style={{ padding: "2px 8px", borderRadius: 5, background: "rgba(0,212,255,0.07)", border: "1px solid rgba(0,212,255,0.15)", fontFamily: "var(--gothic)", fontSize: 8.5, color: "var(--cyan)", letterSpacing: 1 }}>{n.category}</span>}
+                      <span style={{ marginLeft: "auto", fontFamily: "var(--gothic)", fontSize: 8.5, color: "var(--cyan)", opacity: .6 }}>READ ↗</span>
+                    </div>
+                    <div style={{ fontFamily: "var(--serif)", fontSize: 14.5, fontWeight: 700, color: "var(--text)", lineHeight: 1.45, marginBottom: n.summary ? 7 : 0 }}>{n.headline}</div>
+                    {n.summary && <div style={{ fontFamily: "var(--sans)", fontSize: 11.5, color: "var(--text-mid)", lineHeight: 1.65, opacity: .85 }}>{n.summary.slice(0, 200)}{n.summary.length > 200 ? "…" : ""}</div>}
+                  </div>
+                </a>
+              ))}
+            </div>
+          )}
+          {!newsLoading && news.length === 0 && (
+            <div style={{ textAlign: "center", padding: "50px 0", opacity: .4 }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📰</div>
+              <div style={{ fontFamily: "var(--gothic)", fontSize: 12, color: "var(--text-mid)", letterSpacing: 2, textTransform: "uppercase" }}>No news loaded</div>
+              <div style={{ fontFamily: "var(--sans)", fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>Click Refresh to fetch latest market news</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", opacity: .5, textAlign: "center", marginTop: 4 }}>
+        ⚡ Live data via Finnhub API · Auto-refresh every 60s · Click any row to view 30-day chart
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MARKET TAB — Overview + Calendar + Finnhub Live
+═══════════════════════════════════════════════════════════════ */
+function MarketTab({ finnhubKey }) {
+  const [view, setView] = useState(finnhubKey ? "live" : "overview");
+
+  const VIEWS = finnhubKey
+    ? [["live", "⚡ Live Market"], ["overview", "🌐 Market Overview"], ["calendar", "📅 Economic Calendar"]]
+    : [["overview", "🌐 Market Overview"], ["calendar", "📅 Economic Calendar"]];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 3, border: "1px solid var(--border)", width: "fit-content" }}>
-        {[["overview", "🌐 Market Overview"], ["calendar", "📅 Economic Calendar"]].map(([id, label]) => (
+        {VIEWS.map(([id, label]) => (
           <button key={id} onClick={() => setView(id)} style={{
             padding: "7px 18px", borderRadius: 8, border: view === id ? "1px solid rgba(0,212,255,0.25)" : "1px solid transparent",
             cursor: "pointer", fontFamily: "var(--sans)", fontWeight: 600, fontSize: 12, transition: "all .2s",
@@ -5130,7 +5591,13 @@ function MarketTab() {
             color: view === id ? "var(--cyan)" : "var(--text-dim)",
           }}>{label}</button>
         ))}
+        {!finnhubKey && (
+          <div style={{ display: "flex", alignItems: "center", padding: "0 12px", fontFamily: "var(--mono)", fontSize: 10, color: "var(--gold)", opacity: .7 }}>
+            ⚠ Add Finnhub key in Settings for Live tab
+          </div>
+        )}
       </div>
+      {view === "live"     && <FinnhubLiveMarket apiKey={finnhubKey} />}
       {view === "overview" && <MarketOverviewWidget />}
       {view === "calendar" && <EconomicCalendar />}
     </div>
@@ -6055,9 +6522,40 @@ function Settings({ settings, setSettings, trades, setTrades }) {
         </div>
       </div>
 
+      {/* ── FINNHUB API KEY ── */}
+      <div className="glass-card" style={{ borderLeft: "3px solid rgba(0,212,255,0.6)" }}>
+        <div className="section-label" style={{ color: "var(--cyan)" }}>🔑 Finnhub API Key — Live Market Data</div>
+        <div style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-mid)", lineHeight: 1.7, marginBottom: 14 }}>
+          Paste your <strong style={{ color: "var(--cyan)" }}>Finnhub API key</strong> below to unlock the <strong style={{ color: "var(--gold)" }}>Live Market</strong> tab with real-time stock quotes, charts, and market news.
+          Get a free key at <a href="https://finnhub.io" target="_blank" rel="noopener noreferrer" style={{ color: "var(--cyan)", textDecoration: "underline" }}>finnhub.io</a> — free tier supports 60 calls/min.
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <input
+            type="password"
+            placeholder="Enter your Finnhub API key..."
+            value={s.finnhubKey || ""}
+            onChange={e => set("finnhubKey", e.target.value)}
+            style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 13, letterSpacing: 1 }}
+          />
+          <button className="btn-gold" onClick={save} style={{ flexShrink: 0 }}>Save Key</button>
+        </div>
+        {s.finnhubKey && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, padding: "8px 14px", background: "rgba(0,212,255,0.07)", borderRadius: 8, border: "1px solid rgba(0,212,255,0.2)" }}>
+            <span style={{ color: "var(--green)", fontSize: 14 }}>✓</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--green)" }}>API key set — Live Market tab is powered by Finnhub</span>
+          </div>
+        )}
+        {!s.finnhubKey && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, padding: "8px 14px", background: "rgba(255,165,0,0.06)", borderRadius: 8, border: "1px solid rgba(255,165,0,0.2)" }}>
+            <span style={{ color: "var(--gold)", fontSize: 14 }}>⚠</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--gold)" }}>No API key — Markets tab uses TradingView widgets only</span>
+          </div>
+        )}
+      </div>
+
       <div className="glass-card" style={{ borderLeft: "3px solid var(--cyan)" }}>
         <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)", lineHeight: 2.2 }}>
-          {["All data stored locally in your browser — zero cloud dependency", `${STOCK_DB_DEDUPED.length}+ NSE & BSE stocks in autocomplete database`, "Export JSON before clearing data — cannot be recovered", "TradingView charts load live data from NSE/BSE", "No API key required — everything runs locally"].map((t, i) => <div key={i}>◈ {t}</div>)}
+          {["All data stored locally in your browser — zero cloud dependency", `${STOCK_DB_DEDUPED.length}+ NSE & BSE stocks in autocomplete database`, "Export JSON before clearing data — cannot be recovered", "TradingView charts load live data from NSE/BSE", "Finnhub API key stored locally — never sent to any server"].map((t, i) => <div key={i}>◈ {t}</div>)}
         </div>
       </div>
     </div>
@@ -6081,7 +6579,7 @@ function AmbientBackground() {
 /* ═══════════════════════════════════════════════════════════════
    DEFAULT DATA
 ═══════════════════════════════════════════════════════════════ */
-const DEFAULT_SETTINGS = { capital: "", riskPct: "1", dailyLimit: "", maxTrades: "3", name: "", exchange: "NSE" };
+const DEFAULT_SETTINGS = { capital: "", riskPct: "1", dailyLimit: "", maxTrades: "3", name: "", exchange: "NSE", finnhubKey: "" };
 const DEFAULT_PLAYBOOK = [
   { id: 1, name: "ORB Breakout", type: "Long", market: "Trending", setup: "Price breaks above Opening Range High (first 15-min candle) with volume surge > 1.5x avg.", entry: "Buy at ORH + small buffer on 5-min close above", exit: "Previous day high or 2x ATR from entry", stoploss: "Below ORH or Opening Range Low", rr: "1:2 to 1:3", notes: "Best in strong trending markets. Avoid on expiry or major news days." },
   { id: 2, name: "PDH Rejection Short", type: "Short", market: "Ranging", setup: "Price touches Previous Day High and shows reversal candle (engulfing, pin bar) on 15-min chart.", entry: "Short on close below reversal candle low", exit: "Previous Day Low or VWAP", stoploss: "Above PDH by 0.2%", rr: "1:2", notes: "Strong R:R setup. Works well in Bank Nifty. Avoid in strong trending days." },
@@ -6481,7 +6979,7 @@ function TradingJournalMain() {
                 {tab === "journal"   && "Click a row to expand details · Edit or delete entries"}
                 {tab === "calendar"  && "Daily P&L heatmap — hover cells for details"}
                 {tab === "chart"     && `${STOCK_DB_DEDUPED.length} curated stocks + ALL 5000+ BSE & 3000+ NSE stocks via TradingView`}
-                {tab === "market"    && "Live market overview + economic calendar for NSE/BSE/Global"}
+                {tab === "market"    && `Live market data via Finnhub API + TradingView widgets · NSE/BSE/Global`}
                 {tab === "risk"      && "Calculate optimal position size based on your risk rules"}
                 {tab === "playbook"  && "Document and organize your proven trading setups"}
                 {tab === "news"     && "Type a company name or NSE/BSE ticker to fetch the latest news"}
@@ -6502,7 +7000,7 @@ function TradingJournalMain() {
           )}
           {tab === "calendar"  && <CalendarView trades={trades} />}
           {tab === "chart"     && <ChartTab />}
-          {tab === "market"    && <MarketTab />}
+          {tab === "market"    && <MarketTab finnhubKey={settings.finnhubKey || ""} />}
           {tab === "risk"      && <RiskCalculator settings={settings} />}
           {tab === "playbook"  && <Playbook playbook={playbook} setPlaybook={setPlaybook} />}
           {tab === "news"      && <NewsTab />}
@@ -6577,7 +7075,7 @@ export default function RyanHUD() {
   const [todoList, setTodoList] = useState([]);
   const [habitData, setHabitData] = useState({});
   const [habitInput, setHabitInput] = useState("");
-  const [settings, setSettings] = useState({loc:"Nashik",name:"Ryan",voice:"",ttsSpeed:"1.05",groqKey:"",geminiKey:"",cerebrasKey:"",mistralKey:""});
+  const [settings, setSettings] = useState({loc:"Nashik",name:"Ryan",voice:"",ttsSpeed:"1.05",groqKey:"",geminiKey:"",cerebrasKey:"",mistralKey:"",finnhubKey:""});
   const [voices, setVoices] = useState([]);
   // NEW features state
   const [moodLog, setMoodLog] = useState(()=>{try{return JSON.parse(safeLS.get("RYN_MOOD","[]"));}catch{return [];}});
@@ -6621,7 +7119,7 @@ export default function RyanHUD() {
   // Init
   useEffect(()=>{
     // Load settings from LS (no API keys needed)
-    setSettings({loc:safeLS.get("RYN_LOC","Nashik"),name:safeLS.get("RYN_NAME","Ryan"),voice:safeLS.get("RYN_VOICE",""),ttsSpeed:safeLS.get("RYN_SPEED","1.05"),groqKey:safeLS.get("RYN_GROQ_KEY",""),geminiKey:safeLS.get("RYN_GEMINI_KEY",""),cerebrasKey:safeLS.get("RYN_CEREBRAS_KEY",""),mistralKey:safeLS.get("RYN_MISTRAL_KEY","")});
+    setSettings({loc:safeLS.get("RYN_LOC","Nashik"),name:safeLS.get("RYN_NAME","Ryan"),voice:safeLS.get("RYN_VOICE",""),ttsSpeed:safeLS.get("RYN_SPEED","1.05"),groqKey:safeLS.get("RYN_GROQ_KEY",""),geminiKey:safeLS.get("RYN_GEMINI_KEY",""),cerebrasKey:safeLS.get("RYN_CEREBRAS_KEY",""),mistralKey:safeLS.get("RYN_MISTRAL_KEY",""),finnhubKey:safeLS.get("RYN_FINNHUB_KEY","")});
     Brain.init();
     // ── INIT STOCK ENGINE ──
     StockEngine.init();
@@ -7051,7 +7549,7 @@ export default function RyanHUD() {
     document.addEventListener("keydown",h); return ()=>document.removeEventListener("keydown",h);
   },[toggleMic]);
 
-  const saveSettings=()=>{safeLS.set("RYN_LOC",settings.loc);safeLS.set("RYN_NAME",settings.name);safeLS.set("RYN_VOICE",settings.voice||"");const spd=parseFloat(settings.ttsSpeed)||1.05;safeLS.set("RYN_SPEED",String(spd));setTtsSpeed(spd);safeLS.set("RYN_PERSONA",selectedPersona);safeLS.set("RYN_GROQ_KEY",settings.groqKey||"");safeLS.set("RYN_GEMINI_KEY",settings.geminiKey||"");safeLS.set("RYN_CEREBRAS_KEY",settings.cerebrasKey||"");safeLS.set("RYN_MISTRAL_KEY",settings.mistralKey||"");Brain.init();setOverlay(null);showToast("Settings saved! ✓");};
+  const saveSettings=()=>{safeLS.set("RYN_LOC",settings.loc);safeLS.set("RYN_NAME",settings.name);safeLS.set("RYN_VOICE",settings.voice||"");const spd=parseFloat(settings.ttsSpeed)||1.05;safeLS.set("RYN_SPEED",String(spd));setTtsSpeed(spd);safeLS.set("RYN_PERSONA",selectedPersona);safeLS.set("RYN_GROQ_KEY",settings.groqKey||"");safeLS.set("RYN_GEMINI_KEY",settings.geminiKey||"");safeLS.set("RYN_CEREBRAS_KEY",settings.cerebrasKey||"");safeLS.set("RYN_MISTRAL_KEY",settings.mistralKey||"");safeLS.set("RYN_FINNHUB_KEY",settings.finnhubKey||"");Brain.init();setOverlay(null);showToast("Settings saved! ✓");};
 
   const msgColors={ryn:C.CYAN,you:C.GREEN,ai:"#88eeff",sys:"#00aaff",err:C.RED,dim:"#00ddee"};
   const filteredApps=APPS.filter(a=>!launcherFilter||a.name.toLowerCase().includes(launcherFilter.toLowerCase())||a.cat.toLowerCase().includes(launcherFilter.toLowerCase()));
@@ -7186,7 +7684,7 @@ export default function RyanHUD() {
                 {Brain.provider==="local"?"No API key set — running offline. Add at least one key below to unlock the 4-provider RDT brain.":Brain.provider==="cerebras"?"Cerebras WSE — ultra-fast inference. Smart router picks the best model per message.":Brain.provider==="groq"?"Groq LPU — Llama 3 models. Blazing fast, free tier at console.groq.com.":Brain.provider==="mistral"?"Mistral handles heavy prompts and code — Codestral for code, Large for long context.":"Gemini/Gemma 4 active — grounding-enabled for live web queries."}
               </div>
               <div style={{display:"flex",gap:10,marginTop:8,flexWrap:"wrap"}}>
-                {[{p:"cerebras",label:"Cerebras",col:"#00ffdd",key:settings.cerebrasKey},{p:"groq",label:"Groq",col:"#00ff99",key:settings.groqKey},{p:"gemini",label:"Gemini",col:"#4d9fff",key:settings.geminiKey},{p:"mistral",label:"Mistral",col:"#ff9966",key:settings.mistralKey}].map(({p,label,col,key})=>(
+                {[{p:"cerebras",label:"Cerebras",col:"#00ffdd",key:settings.cerebrasKey},{p:"groq",label:"Groq",col:"#00ff99",key:settings.groqKey},{p:"gemini",label:"Gemini",col:"#4d9fff",key:settings.geminiKey},{p:"mistral",label:"Mistral",col:"#ff9966",key:settings.mistralKey},{p:"finnhub",label:"Finnhub",col:"#ffcc00",key:settings.finnhubKey}].map(({p,label,col,key})=>(
                   <div key={p} style={{display:"flex",alignItems:"center",gap:4,fontSize:9}}>
                     <div style={{width:6,height:6,borderRadius:"50%",background:key?col:"#223344",boxShadow:key?`0 0 6px ${col}`:"none"}}/>
                     <span style={{color:key?col:"#334455",letterSpacing:1}}>{label}</span>
@@ -7220,6 +7718,24 @@ export default function RyanHUD() {
               <label style={{display:"block",fontSize:10,color:"#ff9966",marginBottom:4,letterSpacing:1}}>MISTRAL API KEY <span style={{color:"#446688",fontWeight:"normal"}}>(free tier at console.mistral.ai)</span></label>
               <input type="password" value={settings.mistralKey||""} onChange={e=>setSettings(s=>({...s,mistralKey:e.target.value}))} placeholder="..." style={{...S.input,width:"100%",fontFamily:"monospace"}}/>
               {settings.mistralKey?<div style={{fontSize:9,color:"#ff9966",marginTop:3}}>✓ Mistral active — Small · Large · Codestral for heavy code &amp; long context</div>:<div style={{fontSize:9,color:"#334455",marginTop:3}}>◇ Mistral Small · Large (long context) · Codestral (code specialist)</div>}
+            </div>
+
+            {/* ── FINNHUB API KEY ── */}
+            <div style={{marginBottom:14,background:"#ffcc0008",border:"1px solid #ffcc0030",borderRadius:4,padding:"10px 12px"}}>
+              <label style={{display:"block",fontSize:10,color:"#ffcc00",marginBottom:4,letterSpacing:1}}>
+                📈 FINNHUB API KEY <span style={{color:"#446688",fontWeight:"normal"}}>(free at finnhub.io — 60 calls/min)</span>
+              </label>
+              <input
+                type="password"
+                value={settings.finnhubKey||""}
+                onChange={e=>setSettings(s=>({...s,finnhubKey:e.target.value}))}
+                placeholder="xxxxxxxxxxxxxxxxxxxxxx"
+                style={{...S.input,width:"100%",fontFamily:"monospace"}}
+              />
+              {settings.finnhubKey
+                ? <div style={{fontSize:9,color:"#ffcc00",marginTop:3}}>✓ Finnhub active — Live quotes · 30-day charts · Market news in Stock Market tab</div>
+                : <div style={{fontSize:9,color:"#334455",marginTop:3}}>◇ Unlocks Live Market tab — real-time NSE/US/Crypto prices, charts &amp; news</div>
+              }
             </div>
 
             {/* User prefs */}
