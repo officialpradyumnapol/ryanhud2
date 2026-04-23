@@ -4703,416 +4703,736 @@ function StreakBadge({ trades }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TICKER TAPE — Live NSE/BSE Market Data via TradingView
+   FINNHUB ENGINE — Central API client (zero TradingView)
 ═══════════════════════════════════════════════════════════════ */
-function TickerTape() {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = "";
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      symbols: [
-        { proName:"NSE:NIFTY",    displayName:"NIFTY 50" },
-        { proName:"NSE:BANKNIFTY",displayName:"BANK NIFTY" },
-        { proName:"BSE:SENSEX",   displayName:"SENSEX" },
-        { proName:"NSE:FINNIFTY", displayName:"FIN NIFTY" },
-        { proName:"NSE:MIDCPNIFTY",displayName:"MIDCAP NIFTY" },
-        { proName:"NSE:INDIAVIX", displayName:"VIX" },
-        { proName:"NSE:RELIANCE", displayName:"RELIANCE" },
-        { proName:"NSE:TCS",      displayName:"TCS" },
-        { proName:"NSE:HDFCBANK", displayName:"HDFC BANK" },
-        { proName:"NSE:ICICIBANK",displayName:"ICICI BANK" },
-        { proName:"NSE:INFY",     displayName:"INFOSYS" },
-        { proName:"NSE:SBIN",     displayName:"SBI" },
-        { proName:"NSE:TATAMOTORS",displayName:"TATA MOTORS" },
-        { proName:"NSE:WIPRO",    displayName:"WIPRO" },
-        { proName:"NSE:BAJFINANCE",displayName:"BAJAJ FIN" },
-        { proName:"FX:USDINR",    displayName:"USD/INR" },
-        { proName:"COMEX:GC1!",   displayName:"GOLD" },
-        { proName:"NYMEX:CL1!",   displayName:"CRUDE OIL" },
-      ],
-      showSymbolLogo: false,
-      isTransparent: true,
-      displayMode: "adaptive",
-      colorTheme: "dark",
-      locale: "en",
-    });
-    ref.current.appendChild(script);
-  }, []);
-  return (
-    <div style={{ borderBottom: "1px solid rgba(0,212,255,0.12)", background: "rgba(0,212,255,0.02)", height: 46 }}>
-      <div className="tradingview-widget-container" ref={ref} style={{ height: "100%" }}>
-        <div className="tradingview-widget-container__widget" style={{ height: "100%" }} />
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   ENHANCED TRADINGVIEW CHART
-═══════════════════════════════════════════════════════════════ */
-const TV_INTERVALS = [
-  { label:"1m",  val:"1"  }, { label:"5m",  val:"5"  }, { label:"15m", val:"15" },
-  { label:"30m", val:"30" }, { label:"1H",  val:"60" }, { label:"4H",  val:"240"},
-  { label:"1D",  val:"D"  }, { label:"1W",  val:"W"  }, { label:"1M",  val:"M"  },
-];
-
-const TV_STYLES = [
-  { label:"🕯 Candle", val:"1" }, { label:"○ Heikin", val:"8" },
-  { label:"▬ Bar",    val:"0" }, { label:"⌇ Line",   val:"2" },
-  { label:"▨ Area",   val:"3" },
-];
-
-const TV_STUDIES_PRESETS = {
-  "Basic":    ["Volume@tv-basicstudies"],
-  "Day Trade": ["RSI@tv-basicstudies","VWAP@tv-basicstudies","Volume@tv-basicstudies"],
-  "Swing":    ["RSI@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies"],
-  "Advanced": ["RSI@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies","Volume@tv-basicstudies","ATR@tv-basicstudies","VWAP@tv-basicstudies"],
+const FH = {
+  BASE: "https://finnhub.io/api/v1",
+  async get(path, key) {
+    try {
+      const r = await fetch(`${this.BASE}${path}&token=${key}`, { signal: AbortSignal.timeout(9000) });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  },
+  async quote(sym, key) {
+    const d = await this.get(`/quote?symbol=${encodeURIComponent(sym)}`, key);
+    return d?.c > 0 ? d : null;
+  },
+  async candle(sym, res, from, to, key) {
+    return await this.get(`/stock/candle?symbol=${encodeURIComponent(sym)}&resolution=${res}&from=${from}&to=${to}`, key);
+  },
+  async news(key) {
+    return await this.get(`/news?category=general&minId=0`, key);
+  },
+  async earnings(from, to, key) {
+    return await this.get(`/calendar/earnings?from=${from}&to=${to}`, key);
+  },
+  async ipo(from, to, key) {
+    return await this.get(`/calendar/ipo?from=${from}&to=${to}`, key);
+  },
+  async search(q, key) {
+    return await this.get(`/search?q=${encodeURIComponent(q)}`, key);
+  },
+  async metrics(sym, key) {
+    return await this.get(`/stock/metric?symbol=${encodeURIComponent(sym)}&metric=all`, key);
+  },
+  async peers(sym, key) {
+    return await this.get(`/stock/peers?symbol=${encodeURIComponent(sym)}`, key);
+  },
 };
 
-function TradingViewChart({ symbol = "NSE:NIFTY", interval = "15", style = "1", studies = ["RSI@tv-basicstudies","MACD@tv-basicstudies","BB@tv-basicstudies"] }) {
-  const containerRef = useRef(null);
-  const widgetRef = useRef(null);
+/* ═══════════════════════════════════════════════════════════════
+   TICKER TAPE — Finnhub live prices (no TradingView)
+═══════════════════════════════════════════════════════════════ */
+const TAPE_SYMBOLS = [
+  { sym:"AAPL",             label:"AAPL" },
+  { sym:"MSFT",             label:"MSFT" },
+  { sym:"GOOGL",            label:"GOOGL" },
+  { sym:"NVDA",             label:"NVDA" },
+  { sym:"TSLA",             label:"TSLA" },
+  { sym:"AMZN",             label:"AMZN" },
+  { sym:"META",             label:"META" },
+  { sym:"BINANCE:BTCUSDT",  label:"BTC/USDT" },
+  { sym:"BINANCE:ETHUSDT",  label:"ETH/USDT" },
+  { sym:"OANDA:USD_INR",    label:"USD/INR" },
+  { sym:"NSE:RELIANCE",     label:"RELIANCE" },
+  { sym:"NSE:TCS",          label:"TCS" },
+  { sym:"NSE:HDFCBANK",     label:"HDFC BANK" },
+  { sym:"NSE:INFY",         label:"INFOSYS" },
+  { sym:"NSE:SBIN",         label:"SBI" },
+  { sym:"NSE:ICICIBANK",    label:"ICICI" },
+  { sym:"NSE:WIPRO",        label:"WIPRO" },
+];
+
+function FinnhubTickerTape({ apiKey }) {
+  const [tickers, setTickers] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
   useEffect(() => {
-    if (!containerRef.current) return;
-    containerRef.current.innerHTML = "";
-    const s = document.createElement("script");
-    s.src = "https://s3.tradingview.com/tv.js";
-    s.async = true;
-    s.onload = () => {
-      if (window.TradingView && containerRef.current) {
-        widgetRef.current = new window.TradingView.widget({
-          width: "100%", height: 560, symbol, interval,
-          timezone: "Asia/Kolkata", theme: "dark", style, locale: "en",
-          toolbar_bg: "#060610", enable_publishing: false, allow_symbol_change: true,
-          container_id: "tv_chart_v4", hide_side_toolbar: false,
-          studies, backgroundColor: "#03030a", gridColor: "#0a0a16",
-          details: true, hotlist: true, calendar: true, watchlist: true,
-          show_popup_button: true,
-        });
+    if (!apiKey) { setLoaded(true); return; }
+    let cancelled = false;
+    (async () => {
+      const results = [];
+      for (const s of TAPE_SYMBOLS) {
+        const q = await FH.quote(s.sym, apiKey);
+        if (!cancelled && q) results.push({ ...s, c: q.c, dp: q.dp, d: q.d });
+        if (!cancelled && results.length === 1) setTickers([...results]); // show first result fast
       }
-    };
-    document.head.appendChild(s);
-    return () => { try { document.head.removeChild(s); } catch {} };
-  }, [symbol, interval, style, studies.join(",")]);
-  return (
-    <div style={{ background: "var(--glass)", border: "1px solid rgba(0,212,255,0.15)", borderRadius: 16, overflow: "hidden", boxShadow: "0 8px 40px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,212,255,0.06)" }}>
-      <div id="tv_chart_v4" ref={containerRef} style={{ minHeight: 560 }} />
-    </div>
-  );
-}
+      if (!cancelled) { setTickers(results); setLoaded(true); }
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
 
-/* ═══════════════════════════════════════════════════════════════
-   MARKET OVERVIEW WIDGET
-═══════════════════════════════════════════════════════════════ */
-function MarketOverviewWidget() {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = "";
-    const script = document.createElement("script");
-    script.src = "https://s3.tradingview.com/external-embedding/embed-widget-market-overview.js";
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      colorTheme: "dark", dateRange: "1D", showChart: true, locale: "en",
-      width: "100%", height: 400, isTransparent: true, showSymbolLogo: true,
-      tabs: [
-        {
-          title: "Indices", symbols: [
-            { s:"NSE:NIFTY",     d:"NIFTY 50" },
-            { s:"NSE:BANKNIFTY", d:"BANK NIFTY" },
-            { s:"BSE:SENSEX",    d:"SENSEX" },
-            { s:"NSE:FINNIFTY",  d:"FIN NIFTY" },
-            { s:"NSE:MIDCPNIFTY",d:"MIDCAP NIFTY" },
-          ]
-        },
-        {
-          title: "F&O Stocks", symbols: [
-            { s:"NSE:RELIANCE" }, { s:"NSE:TCS" },
-            { s:"NSE:HDFCBANK" }, { s:"NSE:ICICIBANK" },
-            { s:"NSE:INFY" }, { s:"NSE:SBIN" },
-          ]
-        },
-        {
-          title: "Commodities", symbols: [
-            { s:"COMEX:GC1!",  d:"GOLD" },
-            { s:"NYMEX:CL1!",  d:"CRUDE OIL" },
-            { s:"COMEX:SI1!",  d:"SILVER" },
-            { s:"FX:USDINR",   d:"USD/INR" },
-          ]
-        },
-      ]
-    });
-    ref.current.appendChild(script);
-  }, []);
-  return (
-    <div style={{ borderRadius: 16, overflow: "hidden", border: "1px solid var(--border)" }}>
-      <div className="tradingview-widget-container" ref={ref}>
-        <div className="tradingview-widget-container__widget" />
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   ECONOMIC CALENDAR WIDGET
-═══════════════════════════════════════════════════════════════ */
-function EconomicCalendar() {
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!ref.current) return;
-    ref.current.innerHTML = "";
-    const s = document.createElement("script");
-    s.src = "https://s3.tradingview.com/external-embedding/embed-widget-events.js";
-    s.async = true;
-    s.innerHTML = JSON.stringify({
-      colorTheme: "dark", isTransparent: true, width: "100%", height: 450,
-      locale: "en", importanceFilter: "-1,0,1",
-      countryFilter: "in,us",
-    });
-    ref.current.appendChild(s);
-  }, []);
-  return (
-    <div style={{ borderRadius: 16, overflow: "hidden", border: "1px solid var(--border)" }}>
-      <div className="tradingview-widget-container" ref={ref}>
-        <div className="tradingview-widget-container__widget" />
-      </div>
-    </div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   CHART TAB — Enhanced
-═══════════════════════════════════════════════════════════════ */
-const CHART_CATEGORY_STOCKS = {
-  "🔥 Indices":    ["NSE:NIFTY","NSE:BANKNIFTY","BSE:SENSEX","NSE:FINNIFTY","NSE:MIDCPNIFTY"],
-  "🏦 Banking":    ["NSE:HDFCBANK","NSE:ICICIBANK","NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:INDUSINDBK","NSE:BANDHANBNK","NSE:FEDERALBNK"],
-  "💻 IT":         ["NSE:TCS","NSE:INFY","NSE:WIPRO","NSE:HCLTECH","NSE:TECHM","NSE:LTIM","NSE:MPHASIS","NSE:PERSISTENT","NSE:TATAELXSI"],
-  "⚡ Energy":     ["NSE:RELIANCE","NSE:ONGC","NSE:BPCL","NSE:TATAPOWER","NSE:ADANIGREEN","NSE:NTPC","NSE:POWERGRID","NSE:GAIL"],
-  "🚗 Auto":       ["NSE:MARUTI","NSE:TATAMOTORS","NSE:M_M","NSE:BAJAJ_AUTO","NSE:EICHERMOT","NSE:HEROMOTOCO","NSE:TVSMOTOR"],
-  "💊 Pharma":     ["NSE:SUNPHARMA","NSE:DRREDDY","NSE:CIPLA","NSE:DIVISLAB","NSE:LUPIN","NSE:AUROPHARMA","NSE:BIOCON","NSE:TORNTPHARM"],
-  "🏗 Infra":      ["NSE:LT","NSE:ADANIPORTS","NSE:DLF","NSE:GODREJPROP","NSE:GMRINFRA","NSE:SIEMENS","NSE:HAL","NSE:BEL"],
-  "🧴 FMCG":       ["NSE:HINDUNILVR","NSE:ITC","NSE:NESTLEIND","NSE:DABUR","NSE:MARICO","NSE:COLPAL","NSE:GODREJCP","NSE:EMAMILTD"],
-};
-
-function ChartTab({ defaultSymbol = "NSE:NIFTY" }) {
-  const [symbol, setSymbol] = useState(defaultSymbol);
-  const [interval, setInterval] = useState("15");
-  const [chartStyle, setChartStyle] = useState("1");
-  const [studyPreset, setStudyPreset] = useState("Day Trade");
-  const [activeCategory, setActiveCategory] = useState("🔥 Indices");
-  const [directInput, setDirectInput] = useState("");
-  const [directExchange, setDirectExchange] = useState("NSE");
-  const [directInputActive, setDirectInputActive] = useState(false);
-
-  const loadSymbol = (sym) => setSymbol(sym);
-
-  // Resolve any typed symbol → TradingView format
-  const loadDirect = () => {
-    const raw = directInput.trim().toUpperCase();
-    if (!raw) return;
-    // If user typed full TV format like NSE:RELIANCE or BSE:500325
-    if (raw.includes(":")) {
-      loadSymbol(raw);
-    } else {
-      loadSymbol(`${directExchange}:${raw}`);
-    }
-    setDirectInputActive(false);
-  };
+  const items = tickers.length ? [...tickers, ...tickers] : [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
-      {/* Coverage banner */}
-      <div style={{
-        background: "linear-gradient(135deg, rgba(0,212,255,0.06), rgba(139,92,246,0.06))",
-        border: "1px solid rgba(0,212,255,0.2)", borderRadius: 12, padding: "10px 16px",
-        display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-      }}>
-        <span style={{ fontSize: 16 }}>📡</span>
-        <div style={{ flex: 1 }}>
-          <span style={{ fontFamily: "var(--sans)", fontSize: 11, fontWeight: 700, color: "var(--cyan)" }}>Full NSE + BSE Coverage via TradingView</span>
-          <span style={{ fontFamily: "var(--sans)", fontSize: 11, color: "var(--text-dim)", marginLeft: 8 }}>
-            5000+ BSE stocks · 3000+ NSE stocks · Use the search below OR type any symbol directly · BSE scrip codes also work (e.g. BSE:500325)
-          </span>
+    <div style={{ borderBottom: "1px solid rgba(0,212,255,0.12)", background: "rgba(0,0,10,0.6)", height: 38, overflow: "hidden", display: "flex", alignItems: "center" }}>
+      {!apiKey ? (
+        <div style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "0 16px" }}>
+          <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "rgba(0,212,255,0.3)", letterSpacing: 2 }}>⚡ FINNHUB TICKER — ADD API KEY IN SETTINGS TO SEE LIVE PRICES</span>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          {[["NSE", "3000+", "var(--cyan)"], ["BSE", "5000+", "var(--gold)"]].map(([ex, cnt, clr]) => (
-            <div key={ex} style={{ textAlign: "center", padding: "4px 12px", borderRadius: 8, background: `${clr === "var(--cyan)" ? "rgba(0,212,255,0.1)" : "rgba(212,168,67,0.1)"}`, border: `1px solid ${clr === "var(--cyan)" ? "rgba(0,212,255,0.25)" : "rgba(212,168,67,0.25)"}` }}>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700, color: clr }}>{cnt}</div>
-              <div style={{ fontFamily: "var(--sans)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1 }}>{ex} Stocks</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Top controls bar */}
-      <div className="glass-card" style={{ padding: "14px 18px" }}>
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-
-          {/* Stock Search from local DB */}
-          <div style={{ flex: "0 0 320px" }}>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, letterSpacing: 2, color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 5 }}>🔍 Search Stock / Index</div>
-            <StockSearch
-              value={symbol.split(":")[1] || symbol}
-              onChange={() => {}}
-              onSelect={(stock) => loadSymbol(stock.tv)}
-              placeholder="NIFTY, HDFCBANK, RELIANCE..."
-            />
-          </div>
-
-          {/* Direct Symbol Entry — for any unlisted stock */}
-          <div style={{ flex: "0 0 280px" }}>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, letterSpacing: 2, color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 5 }}>
-              ⚡ Direct Symbol Entry
-              <span style={{ marginLeft: 6, color: "var(--green)", fontSize: 9, letterSpacing: 0, textTransform: "none", fontWeight: 400 }}>Any NSE/BSE stock</span>
-            </div>
-            <div style={{ display: "flex", gap: 5 }}>
-              {/* Exchange selector */}
-              <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid var(--border)", flexShrink: 0 }}>
-                {["NSE","BSE"].map(ex => (
-                  <button key={ex} onClick={() => setDirectExchange(ex)} style={{
-                    padding: "9px 10px", border: "none", cursor: "pointer",
-                    fontFamily: "var(--mono)", fontSize: 10, fontWeight: 700, transition: "all .12s",
-                    background: directExchange === ex ? (ex === "NSE" ? "rgba(0,212,255,0.2)" : "rgba(212,168,67,0.2)") : "rgba(255,255,255,0.04)",
-                    color: directExchange === ex ? (ex === "NSE" ? "var(--cyan)" : "var(--gold)") : "var(--text-dim)",
-                  }}>{ex}</button>
-                ))}
-              </div>
-              <input
-                type="text"
-                placeholder="e.g. IRFC, SUZLON, 500325"
-                value={directInput}
-                onChange={e => setDirectInput(e.target.value)}
-                onFocus={() => setDirectInputActive(true)}
-                onBlur={() => setDirectInputActive(false)}
-                onKeyDown={e => { if (e.key === "Enter") loadDirect(); }}
-                style={{ flex: 1 }}
-              />
-              <button onClick={loadDirect} style={{
-                padding: "0 12px", borderRadius: 8, border: "none", cursor: "pointer",
-                background: "linear-gradient(135deg, rgba(0,212,255,0.2), rgba(0,212,255,0.08))",
-                color: "var(--cyan)", fontFamily: "var(--mono)", fontSize: 13, fontWeight: 700,
-                border: "1px solid rgba(0,212,255,0.3)", transition: "all .15s", flexShrink: 0,
-              }}>GO</button>
-            </div>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", marginTop: 4, lineHeight: 1.4 }}>
-              Type any symbol → press Enter or GO. Works for all 8000+ NSE+BSE stocks.
-            </div>
-          </div>
-
-          {/* Interval */}
-          <div>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, letterSpacing: 2, color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 5 }}>Interval</div>
-            <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
-              {TV_INTERVALS.map(iv => (
-                <button key={iv.val} onClick={() => setInterval(iv.val)} style={{
-                  padding: "5px 10px", borderRadius: 7, border: "none", cursor: "pointer",
-                  fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .15s",
-                  background: interval === iv.val ? "rgba(0,212,255,0.18)" : "rgba(255,255,255,0.04)",
-                  color: interval === iv.val ? "var(--cyan)" : "var(--text-dim)",
-                  boxShadow: interval === iv.val ? "0 0 0 1px rgba(0,212,255,0.3)" : "none",
-                }}>{iv.label}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* Chart Style */}
-          <div>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, letterSpacing: 2, color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 5 }}>Style</div>
-            <div style={{ display: "flex", gap: 4 }}>
-              {TV_STYLES.map(st => (
-                <button key={st.val} onClick={() => setChartStyle(st.val)} style={{
-                  padding: "5px 10px", borderRadius: 7, border: "none", cursor: "pointer",
-                  fontFamily: "var(--sans)", fontSize: 11, fontWeight: 500, transition: "all .15s",
-                  background: chartStyle === st.val ? "rgba(212,168,67,0.18)" : "rgba(255,255,255,0.04)",
-                  color: chartStyle === st.val ? "var(--gold)" : "var(--text-dim)",
-                  boxShadow: chartStyle === st.val ? "0 0 0 1px rgba(212,168,67,0.3)" : "none",
-                }}>{st.label}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* Studies Preset */}
-          <div>
-            <div style={{ fontFamily: "var(--sans)", fontSize: 10, letterSpacing: 2, color: "var(--text-dim)", textTransform: "uppercase", marginBottom: 5 }}>Indicators</div>
-            <div style={{ display: "flex", gap: 4 }}>
-              {Object.keys(TV_STUDIES_PRESETS).map(p => (
-                <button key={p} onClick={() => setStudyPreset(p)} style={{
-                  padding: "5px 10px", borderRadius: 7, border: "none", cursor: "pointer",
-                  fontFamily: "var(--sans)", fontSize: 11, fontWeight: 500, transition: "all .15s",
-                  background: studyPreset === p ? "rgba(139,92,246,0.18)" : "rgba(255,255,255,0.04)",
-                  color: studyPreset === p ? "var(--purple)" : "var(--text-dim)",
-                  boxShadow: studyPreset === p ? "0 0 0 1px rgba(139,92,246,0.3)" : "none",
-                }}>{p}</button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Category Quick Select */}
-      <div className="glass-card" style={{ padding: "12px 16px" }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", letterSpacing: 1.5, marginRight: 4 }}>QUICK ACCESS:</span>
-          {Object.keys(CHART_CATEGORY_STOCKS).map(cat => (
-            <button key={cat} onClick={() => setActiveCategory(cat)} style={{
-              padding: "4px 12px", borderRadius: 7, border: "none", cursor: "pointer",
-              fontFamily: "var(--sans)", fontSize: 11, fontWeight: 500, transition: "all .15s",
-              background: activeCategory === cat ? "rgba(0,212,255,0.14)" : "rgba(255,255,255,0.04)",
-              color: activeCategory === cat ? "var(--cyan)" : "var(--text-dim)",
-              boxShadow: activeCategory === cat ? "0 0 0 1px rgba(0,212,255,0.25)" : "none",
-            }}>{cat}</button>
-          ))}
-        </div>
-
-        {/* Stocks in category */}
-        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 10 }}>
-          {CHART_CATEGORY_STOCKS[activeCategory]?.map(sym => {
-            const shortName = sym.split(":")[1];
-            const isActive = symbol === sym;
+      ) : !loaded ? (
+        <div style={{ padding: "0 16px", fontFamily: "var(--mono)", fontSize: 9, color: "rgba(0,212,255,0.4)", letterSpacing: 2 }}>FETCHING LIVE PRICES...</div>
+      ) : (
+        <div style={{ display: "flex", gap: 0, animation: "tickerScroll 40s linear infinite", whiteSpace: "nowrap", willChange: "transform" }}>
+          {items.map((t, i) => {
+            const up = t.dp >= 0;
             return (
-              <button key={sym} onClick={() => loadSymbol(sym)} style={{
-                padding: "5px 12px", borderRadius: 7, border: "none", cursor: "pointer",
-                fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .15s",
-                background: isActive ? "linear-gradient(135deg, rgba(212,168,67,0.25), rgba(212,168,67,0.1))" : "rgba(255,255,255,0.04)",
-                color: isActive ? "var(--gold)" : "var(--text)",
-                boxShadow: isActive ? "0 0 0 1px rgba(212,168,67,0.35)" : "none",
-                letterSpacing: .2,
-              }}>{shortName}</button>
+              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 20px", borderRight: "1px solid rgba(0,212,255,0.06)" }}>
+                <span style={{ fontFamily: "var(--gothic)", fontSize: 9.5, color: "rgba(0,212,255,0.5)", letterSpacing: 1.5 }}>{t.label}</span>
+                <span style={{ fontFamily: "var(--mono)", fontSize: 10.5, fontWeight: 700, color: up ? "#0ECC6D" : "#F04060" }}>{t.c?.toLocaleString("en-IN", { maximumFractionDigits: 2 })}</span>
+                <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: up ? "#0ECC6D" : "#F04060", opacity: .8 }}>{up ? "▲" : "▼"}{Math.abs(t.dp).toFixed(2)}%</span>
+              </span>
             );
           })}
         </div>
-      </div>
-
-      {/* Current symbol display */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--cyan)", fontWeight: 600, letterSpacing: .5 }}>{symbol}</div>
-          <div style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", padding: "2px 8px", background: "rgba(0,212,255,0.08)", borderRadius: 5, border: "1px solid rgba(0,212,255,0.15)" }}>LIVE</div>
-        </div>
-        <div style={{ height: 1, flex: 1, background: "rgba(0,212,255,0.12)" }} />
-        <div style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)" }}>
-          {TV_INTERVALS.find(i => i.val === interval)?.label} · {TV_STYLES.find(s => s.val === chartStyle)?.label} · {studyPreset} preset
-        </div>
-        <div style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", padding: "2px 8px", background: "rgba(255,255,255,0.04)", borderRadius: 5, border: "1px solid var(--border)" }}>
-          📺 Use TradingView's built-in search (top-left of chart) for any of 8000+ stocks
-        </div>
-      </div>
-
-      {/* TradingView Chart */}
-      <TradingViewChart
-        symbol={symbol}
-        interval={interval}
-        style={chartStyle}
-        studies={TV_STUDIES_PRESETS[studyPreset]}
-      />
+      )}
+      <style>{`@keyframes tickerScroll { 0%{transform:translateX(0)} 100%{transform:translateX(-50%)} }`}</style>
     </div>
   );
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   CANDLESTICK CHART — Pure SVG, zero TradingView
+═══════════════════════════════════════════════════════════════ */
+function CandlestickSVG({ data, width = 900, height = 320 }) {
+  if (!data?.length) return null;
+  const PAD = { top: 12, bottom: 28, left: 58, right: 14 };
+  const W = width - PAD.left - PAD.right;
+  const H = height - PAD.top - PAD.bottom;
+
+  const prices = data.flatMap(d => [d.h, d.l]);
+  const rawMin = Math.min(...prices), rawMax = Math.max(...prices);
+  const pad = (rawMax - rawMin) * 0.05;
+  const minP = rawMin - pad, maxP = rawMax + pad;
+  const range = maxP - minP || 1;
+
+  const toY = p => PAD.top + H - ((p - minP) / range) * H;
+  const step = W / data.length;
+  const candleW = Math.max(2, Math.min(12, step - 2));
+
+  // Y axis labels
+  const yTicks = 5;
+  const yLabels = Array.from({ length: yTicks + 1 }, (_, i) => minP + (range * i) / yTicks);
+
+  // SMA 20
+  const sma20 = data.map((_, i) => {
+    if (i < 19) return null;
+    const slice = data.slice(i - 19, i + 1);
+    return slice.reduce((s, d) => s + d.c, 0) / 20;
+  });
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" style={{ display: "block" }}>
+      {/* Grid lines */}
+      {yLabels.map((v, i) => (
+        <g key={i}>
+          <line x1={PAD.left} y1={toY(v)} x2={PAD.left + W} y2={toY(v)} stroke="rgba(255,255,255,0.04)" strokeWidth={1} />
+          <text x={PAD.left - 6} y={toY(v) + 4} textAnchor="end" fontSize={8} fill="rgba(255,255,255,0.3)" fontFamily="monospace">
+            {v >= 1000 ? (v / 1000).toFixed(1) + "k" : v.toFixed(v >= 100 ? 0 : 2)}
+          </text>
+        </g>
+      ))}
+      {/* X axis labels */}
+      {data.map((d, i) => i % Math.ceil(data.length / 8) === 0 && (
+        <text key={i} x={PAD.left + i * step + step / 2} y={height - 6} textAnchor="middle" fontSize={8} fill="rgba(255,255,255,0.3)" fontFamily="monospace">{d.date}</text>
+      ))}
+      {/* SMA 20 line */}
+      <polyline
+        fill="none" stroke="rgba(255,200,0,0.55)" strokeWidth={1.2} strokeDasharray="3 2"
+        points={sma20.map((v, i) => v != null ? `${PAD.left + i * step + step / 2},${toY(v)}` : null).filter(Boolean).join(" ")}
+      />
+      {/* Candles */}
+      {data.map((d, i) => {
+        const x = PAD.left + i * step + step / 2;
+        const isUp = d.c >= d.o;
+        const col = isUp ? "#0ECC6D" : "#F04060";
+        const bodyTop = toY(Math.max(d.o, d.c));
+        const bodyBot = toY(Math.min(d.o, d.c));
+        const bodyH = Math.max(1, bodyBot - bodyTop);
+        return (
+          <g key={i}>
+            {/* Wick */}
+            <line x1={x} y1={toY(d.h)} x2={x} y2={toY(d.l)} stroke={col} strokeWidth={1} />
+            {/* Body */}
+            <rect x={x - candleW / 2} y={bodyTop} width={candleW} height={bodyH}
+              fill={isUp ? col : col} fillOpacity={isUp ? 0.85 : 1}
+              stroke={col} strokeWidth={0.5}
+            />
+          </g>
+        );
+      })}
+      {/* Border */}
+      <rect x={PAD.left} y={PAD.top} width={W} height={H} fill="none" stroke="rgba(0,212,255,0.1)" strokeWidth={1} />
+    </svg>
+  );
+}
+
+/* Volume bar chart below candlestick */
+function VolumeSVG({ data, width = 900, height = 60 }) {
+  if (!data?.length) return null;
+  const PAD = { top: 4, bottom: 16, left: 58, right: 14 };
+  const W = width - PAD.left - PAD.right;
+  const H = height - PAD.top - PAD.bottom;
+  const maxVol = Math.max(...data.map(d => d.v || 0)) || 1;
+  const step = W / data.length;
+  const barW = Math.max(1, step - 1.5);
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" style={{ display: "block" }}>
+      <text x={PAD.left - 6} y={PAD.top + 8} textAnchor="end" fontSize={7} fill="rgba(255,255,255,0.2)" fontFamily="monospace">VOL</text>
+      {data.map((d, i) => {
+        const barH = Math.max(1, ((d.v || 0) / maxVol) * H);
+        const isUp = d.c >= d.o;
+        return (
+          <rect key={i}
+            x={PAD.left + i * step + (step - barW) / 2}
+            y={PAD.top + H - barH} width={barW} height={barH}
+            fill={isUp ? "rgba(14,204,109,0.4)" : "rgba(240,64,96,0.4)"}
+          />
+        );
+      })}
+    </svg>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHART TAB — 100% Finnhub powered
+═══════════════════════════════════════════════════════════════ */
+const FH_CATEGORIES = {
+  "🇺🇸 US Tech":   [["AAPL","Apple"],["MSFT","Microsoft"],["GOOGL","Google"],["NVDA","NVIDIA"],["TSLA","Tesla"],["AMZN","Amazon"],["META","Meta"],["NFLX","Netflix"]],
+  "🇮🇳 NSE Blue":  [["NSE:RELIANCE","Reliance"],["NSE:TCS","TCS"],["NSE:HDFCBANK","HDFC Bk"],["NSE:INFY","Infosys"],["NSE:SBIN","SBI"],["NSE:ICICIBANK","ICICI"],["NSE:WIPRO","Wipro"],["NSE:BAJFINANCE","Bajaj Fin"]],
+  "🇮🇳 NSE Auto":  [["NSE:MARUTI","Maruti"],["NSE:TATAMOTORS","Tata Motors"],["NSE:BAJAJ_AUTO","Bajaj Auto"],["NSE:HEROMOTOCO","Hero Moto"],["NSE:EICHERMOT","Eicher"]],
+  "🇮🇳 NSE IT":    [["NSE:TCS","TCS"],["NSE:INFY","Infosys"],["NSE:WIPRO","Wipro"],["NSE:HCLTECH","HCL Tech"],["NSE:TECHM","Tech M"],["NSE:LTIM","LTIM"]],
+  "🇮🇳 NSE Pharma":[["NSE:SUNPHARMA","Sun Ph"],["NSE:DRREDDY","Dr Reddy"],["NSE:CIPLA","Cipla"],["NSE:DIVISLAB","Divi's"],["NSE:LUPIN","Lupin"]],
+  "₿ Crypto":      [["BINANCE:BTCUSDT","BTC/USDT"],["BINANCE:ETHUSDT","ETH/USDT"],["BINANCE:BNBUSDT","BNB/USDT"],["BINANCE:SOLUSDT","SOL/USDT"],["BINANCE:ADAUSDT","ADA/USDT"]],
+  "💱 Forex":       [["OANDA:USD_INR","USD/INR"],["OANDA:EUR_USD","EUR/USD"],["OANDA:GBP_USD","GBP/USD"],["OANDA:USD_JPY","USD/JPY"]],
+};
+
+const FH_RESOLUTIONS = [
+  { label:"1m",  val:"1",  days:1  }, { label:"5m",  val:"5",  days:3  },
+  { label:"15m", val:"15", days:5  }, { label:"30m", val:"30", days:10 },
+  { label:"1H",  val:"60", days:30 }, { label:"4H",  val:"240",days:60 },
+  { label:"1D",  val:"D",  days:180}, { label:"1W",  val:"W",  days:730},
+];
+
+function FinnhubChartTab({ apiKey }) {
+  const [sym, setSym]         = useState("AAPL");
+  const [res, setRes]         = useState("D");
+  const [candles, setCandles] = useState(null);
+  const [quote, setQuote]     = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState("");
+  const [cat, setCat]         = useState("🇺🇸 US Tech");
+  const [input, setInput]     = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [metrics, setMetrics] = useState(null);
+
+  const loadChart = useCallback(async (symbol, resolution) => {
+    if (!apiKey) { setError("Add your Finnhub API key in Settings first."); return; }
+    setLoading(true); setError(""); setCandles(null); setMetrics(null);
+    const r = FH_RESOLUTIONS.find(r => r.val === resolution) || FH_RESOLUTIONS[6];
+    const to = Math.floor(Date.now() / 1000);
+    const from = to - r.days * 86400;
+    const [c, q, m] = await Promise.all([
+      FH.candle(symbol, resolution, from, to, apiKey),
+      FH.quote(symbol, apiKey),
+      FH.metrics(symbol, apiKey),
+    ]);
+    if (c?.s === "ok" && c.c?.length) {
+      const data = c.t.map((ts, i) => ({
+        date: new Date(ts * 1000).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+        o: c.o[i], h: c.h[i], l: c.l[i], c: c.c[i], v: c.v?.[i] || 0,
+      })).slice(-120); // max 120 candles
+      setCandles(data);
+      setQuote(q);
+      setMetrics(m?.metric || null);
+    } else {
+      setError(`No candle data for "${symbol}". Try a different symbol or timeframe.`);
+    }
+    setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  useEffect(() => { loadChart(sym, res); }, [sym, res, loadChart]);
+
+  const doSearch = async () => {
+    if (!input.trim() || !apiKey) return;
+    const d = await FH.search(input.trim(), apiKey);
+    if (d?.result) setSearchResults(d.result.slice(0, 8));
+  };
+
+  const fmtP = (n) => n == null ? "--" : n >= 1000 ? n.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : n.toFixed(2);
+  const isUp = quote ? quote.dp >= 0 : true;
+  const last = candles?.[candles.length - 1];
+  const first = candles?.[0];
+  const periodReturn = (last && first) ? ((last.c - first.c) / first.c * 100).toFixed(2) : null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {!apiKey && (
+        <div className="glass-card" style={{ borderColor: "var(--gold)", padding: "20px 24px", textAlign: "center" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🔑</div>
+          <div style={{ fontFamily: "var(--serif)", fontSize: 18, color: "var(--text)", marginBottom: 8 }}>Finnhub API Key Required</div>
+          <div style={{ fontFamily: "var(--sans)", fontSize: 13, color: "var(--text-dim)" }}>Go to <strong style={{ color: "var(--gold)" }}>Settings</strong> and paste your free Finnhub key to unlock live candlestick charts.</div>
+        </div>
+      )}
+
+      {apiKey && (
+        <>
+          {/* Top bar — symbol info + search */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+            {/* Current symbol quote */}
+            <div className="glass-card" style={{ flex: "0 0 auto", minWidth: 220, padding: "14px 20px" }}>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>{sym}</div>
+              {quote ? (
+                <>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 28, fontWeight: 700, color: isUp ? "var(--green)" : "var(--red)", lineHeight: 1 }}>{fmtP(quote.c)}</div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: isUp ? "var(--green)" : "var(--red)", marginTop: 6 }}>
+                    {isUp ? "▲" : "▼"} {Math.abs(quote.dp).toFixed(2)}% ({quote.d >= 0 ? "+" : ""}{fmtP(quote.d)})
+                  </div>
+                  <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+                    {[["H", quote.h], ["L", quote.l], ["O", quote.o]].map(([l, v]) => (
+                      <div key={l} style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)" }}>{l}: <span style={{ color: "var(--text)" }}>{fmtP(v)}</span></div>
+                    ))}
+                  </div>
+                </>
+              ) : loading ? <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>Loading...</div> : <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>No data</div>}
+            </div>
+
+            {/* Period return */}
+            {periodReturn && (
+              <div className="glass-card" style={{ flex: "0 0 auto", padding: "14px 20px", textAlign: "center", minWidth: 110 }}>
+                <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 6 }}>PERIOD</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 20, fontWeight: 700, color: parseFloat(periodReturn) >= 0 ? "var(--green)" : "var(--red)" }}>
+                  {parseFloat(periodReturn) >= 0 ? "+" : ""}{periodReturn}%
+                </div>
+              </div>
+            )}
+
+            {/* Fundamentals if available */}
+            {metrics && (
+              <div className="glass-card" style={{ flex: 1, padding: "14px 18px" }}>
+                <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 8 }}>KEY METRICS</div>
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                  {[
+                    ["P/E", metrics["peExclExtraTTM"]],
+                    ["EPS", metrics["epsExclExtraItemsTTM"]],
+                    ["52W High", metrics["52WeekHigh"]],
+                    ["52W Low", metrics["52WeekLow"]],
+                    ["Div Yield", metrics["dividendYieldIndicatedAnnual"] ? metrics["dividendYieldIndicatedAnnual"] + "%" : null],
+                    ["Beta", metrics["beta"]],
+                  ].filter(([, v]) => v != null).map(([l, v]) => (
+                    <div key={l}>
+                      <div style={{ fontFamily: "var(--sans)", fontSize: 9, color: "var(--text-dim)" }}>{l}</div>
+                      <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text)", fontWeight: 600 }}>{typeof v === "number" ? v.toFixed(2) : v}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Symbol search */}
+            <div className="glass-card" style={{ flex: "0 0 auto", padding: "14px 18px", minWidth: 260 }}>
+              <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 8 }}>SEARCH SYMBOL</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && doSearch()}
+                  placeholder="AAPL, TSLA, NSE:RELIANCE..." style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 12 }} />
+                <button className="btn-gold" onClick={doSearch} style={{ padding: "6px 14px", fontSize: 11 }}>🔍</button>
+              </div>
+              {searchResults.length > 0 && (
+                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4, maxHeight: 140, overflowY: "auto" }}>
+                  {searchResults.map((r, i) => (
+                    <div key={i} onClick={() => { setSym(r.symbol); setInput(""); setSearchResults([]); }}
+                      style={{ display: "flex", justifyContent: "space-between", padding: "5px 8px", borderRadius: 6, cursor: "pointer", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)" }}
+                      onMouseEnter={e => e.currentTarget.style.background = "rgba(0,212,255,0.08)"}
+                      onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
+                    >
+                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{r.symbol}</span>
+                      <span style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Resolution selector */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>TIMEFRAME:</span>
+            <div style={{ display: "flex", gap: 3, background: "rgba(255,255,255,0.03)", padding: 3, borderRadius: 8, border: "1px solid var(--border)" }}>
+              {FH_RESOLUTIONS.map(r => (
+                <button key={r.val} onClick={() => setRes(r.val)} style={{
+                  padding: "4px 12px", borderRadius: 6, border: "none", cursor: "pointer",
+                  fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .15s",
+                  background: res === r.val ? "rgba(0,212,255,0.16)" : "transparent",
+                  color: res === r.val ? "var(--cyan)" : "var(--text-dim)",
+                  boxShadow: res === r.val ? "0 0 0 1px rgba(0,212,255,0.3)" : "none",
+                }}>{r.label}</button>
+              ))}
+            </div>
+            <div style={{ height: 1, flex: 1, background: "var(--border)" }} />
+            <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 8, height: 2, background: "rgba(255,200,0,0.6)", display: "inline-block" }} />SMA 20
+            </div>
+            <button className="btn-ghost" onClick={() => loadChart(sym, res)} style={{ fontSize: 10, padding: "4px 12px" }}>⟳ Refresh</button>
+          </div>
+
+          {/* Category quick select */}
+          <div className="glass-card" style={{ padding: "12px 16px" }}>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>CATEGORY:</span>
+              {Object.keys(FH_CATEGORIES).map(c => (
+                <button key={c} onClick={() => setCat(c)} style={{
+                  padding: "3px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+                  fontFamily: "var(--sans)", fontSize: 10, transition: "all .12s",
+                  background: cat === c ? "rgba(0,212,255,0.14)" : "rgba(255,255,255,0.04)",
+                  color: cat === c ? "var(--cyan)" : "var(--text-dim)",
+                  boxShadow: cat === c ? "0 0 0 1px rgba(0,212,255,0.25)" : "none",
+                }}>{c}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {FH_CATEGORIES[cat]?.map(([s, label]) => (
+                <button key={s} onClick={() => setSym(s)} style={{
+                  padding: "5px 14px", borderRadius: 7, border: "none", cursor: "pointer",
+                  fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .12s",
+                  background: sym === s ? "linear-gradient(135deg,rgba(232,184,75,0.22),rgba(232,184,75,0.08))" : "rgba(255,255,255,0.04)",
+                  color: sym === s ? "var(--gold)" : "var(--text)",
+                  boxShadow: sym === s ? "0 0 0 1px rgba(232,184,75,0.3)" : "none",
+                }}>{label}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Chart area */}
+          <div className="glass-card" style={{ padding: "16px 16px 8px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--cyan)", fontWeight: 700 }}>{sym}</div>
+              <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2 }}>FINNHUB · {FH_RESOLUTIONS.find(r => r.val === res)?.label} · CANDLESTICK + SMA20 + VOLUME</div>
+            </div>
+            {loading && (
+              <div style={{ height: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+                <div className="spin" style={{ width: 36, height: 36, border: "3px solid rgba(0,212,255,0.1)", borderTopColor: "var(--cyan)", borderRadius: "50%" }} />
+                <div style={{ fontFamily: "var(--gothic)", fontSize: 11, color: "var(--cyan)", letterSpacing: 2 }}>FETCHING CANDLES FROM FINNHUB...</div>
+              </div>
+            )}
+            {error && !loading && (
+              <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--red)", fontFamily: "var(--mono)", fontSize: 12 }}>⚠ {error}</div>
+            )}
+            {candles && !loading && (
+              <>
+                <CandlestickSVG data={candles} width={1100} height={340} />
+                <VolumeSVG data={candles} width={1100} height={56} />
+                <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                  {candles.length > 0 && (() => {
+                    const last = candles[candles.length - 1];
+                    return [["Open",last.o],["High",last.h],["Low",last.l],["Close",last.c],["Volume",last.v ? (last.v / 1e6).toFixed(2) + "M" : "--"]].map(([l, v]) => (
+                      <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 7, padding: "6px 12px", textAlign: "center" }}>
+                        <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", letterSpacing: 1.5 }}>{l}</div>
+                        <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text)", fontWeight: 600, marginTop: 3 }}>{typeof v === "number" ? fmtP(v) : v}</div>
+                      </div>
+                    ));
+                  })()}
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)" }}>
+                    {candles.length} candles · ⚡ Finnhub
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MARKET OVERVIEW — 100% Finnhub
+═══════════════════════════════════════════════════════════════ */
+const FH_OVERVIEW_GROUPS = [
+  { label:"🇺🇸 US Indices / ETFs", syms:[["SPY","S&P 500 ETF"],["QQQ","NASDAQ ETF"],["DIA","Dow Jones ETF"],["IWM","Russell 2000"]] },
+  { label:"🇮🇳 Indian Blue-chip",   syms:[["NSE:RELIANCE","Reliance"],["NSE:TCS","TCS"],["NSE:HDFCBANK","HDFC Bk"],["NSE:INFY","Infosys"],["NSE:SBIN","SBI"],["NSE:ICICIBANK","ICICI"],["NSE:TATAMOTORS","Tata Motors"],["NSE:BAJFINANCE","Bajaj Fin"]] },
+  { label:"🇺🇸 US Mega-Cap",        syms:[["AAPL","Apple"],["MSFT","Microsoft"],["NVDA","NVIDIA"],["GOOGL","Google"],["AMZN","Amazon"],["META","Meta"],["TSLA","Tesla"]] },
+  { label:"₿ Crypto",              syms:[["BINANCE:BTCUSDT","BTC/USDT"],["BINANCE:ETHUSDT","ETH/USDT"],["BINANCE:BNBUSDT","BNB/USDT"],["BINANCE:SOLUSDT","SOL/USDT"],["BINANCE:ADAUSDT","ADA/USDT"]] },
+  { label:"💱 Forex",               syms:[["OANDA:USD_INR","USD/INR"],["OANDA:EUR_USD","EUR/USD"],["OANDA:GBP_USD","GBP/USD"],["OANDA:USD_JPY","USD/JPY"]] },
+  { label:"🏅 Commodities",         syms:[["OANDA:XAU_USD","Gold"],["OANDA:XAG_USD","Silver"],["OANDA:BRENT_CRUDE_OIL","Brent Oil"],["OANDA:NATURAL_GAS","Nat Gas"]] },
+];
+
+function FinnhubMarketOverview({ apiKey }) {
+  const [quotes, setQuotes] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [lastUpd, setLastUpd] = useState(null);
+
+  const fetchAll = useCallback(async () => {
+    if (!apiKey) return;
+    setLoading(true);
+    const allSyms = FH_OVERVIEW_GROUPS.flatMap(g => g.syms.map(([s]) => s));
+    const chunks = [];
+    for (let i = 0; i < allSyms.length; i += 6) chunks.push(allSyms.slice(i, i + 6));
+    const res = {};
+    for (const chunk of chunks) {
+      await Promise.all(chunk.map(async s => {
+        const q = await FH.quote(s, apiKey);
+        if (q) res[s] = q;
+      }));
+      await new Promise(r => setTimeout(r, 250));
+    }
+    setQuotes(res); setLastUpd(new Date()); setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  useEffect(() => { fetchAll(); const iv = setInterval(fetchAll, 60000); return () => clearInterval(iv); }, [fetchAll]);
+
+  const fmtP = n => n == null ? "--" : n >= 1000 ? n.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : n.toFixed(2);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2 }}>◈ LIVE MARKET OVERVIEW · FINNHUB{lastUpd ? ` · ${lastUpd.toLocaleTimeString("en-IN")}` : ""}</div>
+        <button className="btn-ghost" onClick={fetchAll} disabled={loading} style={{ fontSize: 10, padding: "5px 12px" }}>{loading ? "⟳ Refreshing..." : "⟳ Refresh"}</button>
+      </div>
+
+      {FH_OVERVIEW_GROUPS.map(g => (
+        <div key={g.label} className="glass-card" style={{ padding: "14px 18px" }}>
+          <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2, marginBottom: 12 }}>{g.label}</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 8 }}>
+            {g.syms.map(([s, label]) => {
+              const q = quotes[s];
+              const isUp = q ? q.dp >= 0 : null;
+              const col = isUp === null ? "var(--text-dim)" : isUp ? "var(--green)" : "var(--red)";
+              return (
+                <div key={s} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "10px 14px", border: `1px solid ${isUp === null ? "rgba(255,255,255,0.06)" : isUp ? "rgba(14,204,109,0.15)" : "rgba(240,64,96,0.15)"}` }}>
+                  <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1, marginBottom: 6 }}>{label}</div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 15, fontWeight: 700, color: col, lineHeight: 1 }}>{q ? fmtP(q.c) : <span style={{ opacity: .2 }}>—</span>}</div>
+                  <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: col, marginTop: 5, display: "flex", alignItems: "center", gap: 4 }}>
+                    {q ? (
+                      <span style={{ background: isUp ? "rgba(14,204,109,0.1)" : "rgba(240,64,96,0.1)", padding: "2px 7px", borderRadius: 4 }}>
+                        {isUp ? "▲" : "▼"}{Math.abs(q.dp).toFixed(2)}%
+                      </span>
+                    ) : <span style={{ opacity: .2 }}>---</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+
+      {!apiKey && (
+        <div className="glass-card" style={{ borderColor: "var(--gold)", textAlign: "center", padding: "40px 20px" }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>🔑</div>
+          <div style={{ fontFamily: "var(--serif)", fontSize: 18, color: "var(--text)" }}>Add Finnhub API Key</div>
+          <div style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text-dim)", marginTop: 6 }}>Go to Settings and enter your free Finnhub key to see live prices.</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   EARNINGS + IPO CALENDAR — 100% Finnhub
+═══════════════════════════════════════════════════════════════ */
+function FinnhubCalendarTab({ apiKey }) {
+  const [view, setView]       = useState("earnings");
+  const [earnings, setEarnings] = useState([]);
+  const [ipos, setIpos]       = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded]   = useState(false);
+
+  const fetchData = useCallback(async () => {
+    if (!apiKey) return;
+    setLoading(true);
+    const now = new Date();
+    const from = now.toISOString().slice(0, 10);
+    const to   = new Date(now.getTime() + 30 * 86400000).toISOString().slice(0, 10);
+    const [ea, ip] = await Promise.all([FH.earnings(from, to, apiKey), FH.ipo(from, to, apiKey)]);
+    if (ea?.earningsCalendar) setEarnings(ea.earningsCalendar.slice(0, 40));
+    if (ip?.ipoCalendar) setIpos(ip.ipoCalendar.slice(0, 30));
+    setLoaded(true); setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  const fmtDate = d => { try { return new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); } catch { return d; } };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 3, border: "1px solid var(--border)", width: "fit-content" }}>
+        {[["earnings","📅 Earnings Calendar"],["ipo","🚀 IPO Calendar"]].map(([id, label]) => (
+          <button key={id} onClick={() => setView(id)} style={{
+            padding: "7px 18px", borderRadius: 8, cursor: "pointer",
+            fontFamily: "var(--sans)", fontWeight: 600, fontSize: 12, transition: "all .2s",
+            background: view === id ? "rgba(0,212,255,0.12)" : "transparent",
+            color: view === id ? "var(--cyan)" : "var(--text-dim)",
+            border: view === id ? "1px solid rgba(0,212,255,0.25)" : "1px solid transparent",
+          }}>{label}</button>
+        ))}
+        <button className="btn-ghost" onClick={fetchData} style={{ fontSize: 10, padding: "5px 14px" }}>⟳</button>
+      </div>
+
+      {!apiKey && <div className="glass-card" style={{ padding: "30px", textAlign: "center", color: "var(--gold)", fontFamily: "var(--mono)", fontSize: 12 }}>🔑 Add Finnhub API key in Settings</div>}
+      {loading && <div style={{ textAlign: "center", padding: "40px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>Fetching calendar data...</div>}
+
+      {view === "earnings" && loaded && !loading && (
+        <div className="glass-card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 1fr", padding: "10px 18px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+            {["Symbol","Date","EPS Est.","EPS Actual","Revenue Est."].map(h => (
+              <div key={h} style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>{h}</div>
+            ))}
+          </div>
+          {earnings.length === 0 && <div style={{ padding: "30px", textAlign: "center", color: "var(--text-dim)", fontFamily: "var(--mono)", fontSize: 12 }}>No upcoming earnings found.</div>}
+          {earnings.map((e, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1fr 1fr", padding: "11px 18px", borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background .12s" }}
+              onMouseEnter={ev => ev.currentTarget.style.background = "rgba(255,255,255,0.03)"}
+              onMouseLeave={ev => ev.currentTarget.style.background = "transparent"}
+            >
+              <div style={{ fontFamily: "var(--mono)", fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{e.symbol}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)" }}>{fmtDate(e.date)}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-mid)" }}>{e.epsEstimate ?? "--"}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: e.epsActual != null ? (e.epsActual >= (e.epsEstimate || 0) ? "var(--green)" : "var(--red)") : "var(--text-dim)" }}>{e.epsActual ?? "--"}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)" }}>{e.revenueEstimate ? (e.revenueEstimate / 1e9).toFixed(2) + "B" : "--"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {view === "ipo" && loaded && !loading && (
+        <div className="glass-card" style={{ padding: 0, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.8fr 0.8fr 1fr", padding: "10px 18px", borderBottom: "1px solid var(--border)", background: "rgba(255,255,255,0.02)" }}>
+            {["Company","Symbol","Date","Price","Shares"].map(h => (
+              <div key={h} style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>{h}</div>
+            ))}
+          </div>
+          {ipos.length === 0 && <div style={{ padding: "30px", textAlign: "center", color: "var(--text-dim)", fontFamily: "var(--mono)", fontSize: 12 }}>No upcoming IPOs found.</div>}
+          {ipos.map((ip, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.8fr 0.8fr 1fr", padding: "11px 18px", borderBottom: "1px solid rgba(255,255,255,0.03)", transition: "background .12s" }}
+              onMouseEnter={ev => ev.currentTarget.style.background = "rgba(255,255,255,0.03)"}
+              onMouseLeave={ev => ev.currentTarget.style.background = "transparent"}
+            >
+              <div style={{ fontFamily: "var(--sans)", fontSize: 12, color: "var(--text)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ip.name}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{ip.symbol}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)" }}>{fmtDate(ip.date)}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--gold)" }}>{ip.price ? "$" + ip.price : "--"}</div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)" }}>{ip.numberOfShares ? (ip.numberOfShares / 1e6).toFixed(1) + "M" : "--"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MARKET TAB — 100% Finnhub, zero TradingView
+═══════════════════════════════════════════════════════════════ */
+function MarketTab({ finnhubKey }) {
+  const [view, setView] = useState("overview");
+  const VIEWS = [["overview","🌐 Overview"],["watchlist","📊 Watchlist"],["news","📰 News"],["calendar","📅 Calendar"]];
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", gap: 4, background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: 3, border: "1px solid var(--border)", width: "fit-content", flexWrap: "wrap" }}>
+        {VIEWS.map(([id, label]) => (
+          <button key={id} onClick={() => setView(id)} style={{
+            padding: "7px 18px", borderRadius: 8, cursor: "pointer",
+            fontFamily: "var(--sans)", fontWeight: 600, fontSize: 12, transition: "all .2s",
+            background: view === id ? "rgba(0,212,255,0.12)" : "transparent",
+            color: view === id ? "var(--cyan)" : "var(--text-dim)",
+            border: view === id ? "1px solid rgba(0,212,255,0.25)" : "1px solid transparent",
+          }}>{label}</button>
+        ))}
+        <div style={{ display: "flex", alignItems: "center", padding: "0 10px", gap: 6 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: finnhubKey ? "#ffcc00" : "#333", boxShadow: finnhubKey ? "0 0 6px #ffcc00" : "none" }} />
+          <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: finnhubKey ? "#ffcc00" : "var(--text-dim)", letterSpacing: 1 }}>{finnhubKey ? "FINNHUB ⚡" : "NO KEY"}</span>
+        </div>
+      </div>
+      {view === "overview"  && <FinnhubMarketOverview apiKey={finnhubKey} />}
+      {view === "watchlist" && <FinnhubLiveMarket apiKey={finnhubKey} />}
+      {view === "news"      && <FinnhubNewsOnly apiKey={finnhubKey} />}
+      {view === "calendar"  && <FinnhubCalendarTab apiKey={finnhubKey} />}
+    </div>
+  );
+}
+
+/* tiny news-only component for market tab */
+function FinnhubNewsOnly({ apiKey }) {
+  const [news, setNews] = useState([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!apiKey) return;
+    setLoading(true);
+    FH.news(apiKey).then(d => { if (Array.isArray(d)) setNews(d.slice(0, 25)); setLoading(false); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKey]);
+  if (!apiKey) return <div className="glass-card" style={{ textAlign: "center", padding: "30px", color: "var(--gold)", fontFamily: "var(--mono)", fontSize: 12 }}>🔑 Add Finnhub key in Settings</div>;
+  if (loading) return <div style={{ textAlign: "center", padding: "40px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>Loading news...</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {news.map((n, i) => (
+        <a key={i} href={n.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>
+          <div className="fade-up glass-card" style={{ borderLeft: "3px solid var(--gold-border)", padding: "12px 16px", transition: "transform .15s", animationDelay: `${i * .04}s` }}
+            onMouseEnter={e => { e.currentTarget.style.transform = "translateX(4px)"; e.currentTarget.style.borderLeftColor = "var(--cyan)"; }}
+            onMouseLeave={e => { e.currentTarget.style.transform = ""; e.currentTarget.style.borderLeftColor = "var(--gold-border)"; }}
+          >
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+              <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--gold)", letterSpacing: 1.2, fontWeight: 700 }}>{n.source}</span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)" }}>{new Date(n.datetime * 1000).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}</span>
+              <span style={{ marginLeft: "auto", fontSize: 8, color: "var(--cyan)", opacity: .6 }}>READ ↗</span>
+            </div>
+            <div style={{ fontFamily: "var(--serif)", fontSize: 14, fontWeight: 700, color: "var(--text)", lineHeight: 1.45 }}>{n.headline}</div>
+            {n.summary && <div style={{ fontFamily: "var(--sans)", fontSize: 11, color: "var(--text-mid)", marginTop: 5, opacity: .8 }}>{n.summary.slice(0, 180)}…</div>}
+          </div>
+        </a>
+      ))}
+      {news.length === 0 && <div style={{ textAlign: "center", padding: "40px", opacity: .4 }}><div style={{ fontSize: 36 }}>📰</div><div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>No news loaded</div></div>}
+    </div>
+  );
+}
+
+/* ─── dummy remnant for ChartTab alias ─── */
+function ChartTab({ apiKey }) {
+  return <FinnhubChartTab apiKey={apiKey} />;
+}
+
+/* ─── keep CHART_CATEGORY_STOCKS for stock DB reference only ─── */
+const CHART_CATEGORY_STOCKS = {
+  "🔥 Indices":   [],
+  "🏦 Banking":   [],
+  "💻 IT":        [],
+  "⚡ Energy":    [],
+  "🚗 Auto":      [],
+  "💊 Pharma":    [],
+  "🏗 Infra":     [],
+  "🧴 FMCG":      [],
+};
+
+/* ─── Coverage banner used in old ChartTab, now inline placeholder ─── */
+const _CHART_PLACEHOLDER = null; // suppresses unused-var warning
+
+/* now immediately before TradeForm — original cut-point */
+const _TV_COMPAT_STUB = null;
 
 /* ═══════════════════════════════════════════════════════════════
    FINNHUB LIVE MARKET — Full live stock data via Finnhub API
@@ -5598,8 +5918,8 @@ function MarketTab({ finnhubKey }) {
         )}
       </div>
       {view === "live"     && <FinnhubLiveMarket apiKey={finnhubKey} />}
-      {view === "overview" && <MarketOverviewWidget />}
-      {view === "calendar" && <EconomicCalendar />}
+      {view === "overview" && <FinnhubMarketOverview apiKey={finnhubKey} />}
+      {view === "calendar" && <FinnhubCalendarTab apiKey={finnhubKey} />}
     </div>
   );
 }
@@ -6883,7 +7203,7 @@ function TradingJournalMain() {
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
 
         {/* ── TICKER TAPE ── */}
-        <TickerTape />
+        <FinnhubTickerTape apiKey={settings.finnhubKey || ""} />
 
         {/* ── HEADER ── */}
         <header style={{
