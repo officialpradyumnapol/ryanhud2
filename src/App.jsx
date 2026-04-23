@@ -4918,8 +4918,175 @@ function VolumeSVG({ data, width = 900, height = 60 }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   TRADINGVIEW EMBEDDED WIDGET — free official embed, no redirect
+   YAHOO FINANCE CHART — free, no API key, full NSE/BSE/US coverage
+   Used automatically for Indian stocks to avoid TradingView's
+   "This symbol is only available on TradingView" popup
 ═══════════════════════════════════════════════════════════════ */
+function YahooChart({ symbol, interval = "D" }) {
+  const [candles, setCandles] = useState(null);
+  const [quote,   setQuote]   = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState("");
+
+  // Finnhub symbol format → Yahoo Finance ticker
+  const toYahoo = (s) => {
+    if (s.startsWith("NSE:"))     return s.replace("NSE:", "") + ".NS";
+    if (s.startsWith("BSE:"))     return s.replace("BSE:", "") + ".BO";
+    if (s.startsWith("BINANCE:")) return s.replace("BINANCE:", "").replace("USDT", "-USD").replace("BTC", "BTC");
+    if (s.startsWith("OANDA:"))   return s.replace("OANDA:", "").replace("_", "") + "=X";
+    return s; // US stocks work as-is (AAPL, MSFT etc.)
+  };
+
+  // Finnhub resolution → [Yahoo interval, Yahoo range]
+  const toYahooParams = (r) => ({
+    "1":   ["1m",  "1d"],
+    "5":   ["5m",  "5d"],
+    "15":  ["15m", "5d"],
+    "30":  ["30m", "10d"],
+    "60":  ["60m", "1mo"],
+    "240": ["60m", "3mo"],
+    "D":   ["1d",  "6mo"],
+    "W":   ["1wk", "2y"],
+  }[r] || ["1d", "6mo"]);
+
+  useEffect(() => {
+    const ticker = toYahoo(symbol);
+    const [yInt, yRange] = toYahooParams(interval);
+    setLoading(true); setError(""); setCandles(null); setQuote(null);
+
+    const yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${yInt}&range=${yRange}&includePrePost=false`;
+    // allorigins proxy bypasses Yahoo CORS restriction
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(yUrl)}`;
+
+    fetch(proxy)
+      .then(r => r.json())
+      .then(raw => {
+        let parsed;
+        try { parsed = JSON.parse(raw.contents); } catch { throw new Error("Parse error"); }
+        const result = parsed?.chart?.result?.[0];
+        if (!result) throw new Error("No chart data returned");
+
+        const { timestamp, indicators, meta } = result;
+        const ohlcv = indicators.quote[0];
+
+        const data = timestamp
+          .map((ts, i) => ({
+            date: new Date(ts * 1000).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+            o: ohlcv.open?.[i],
+            h: ohlcv.high?.[i],
+            l: ohlcv.low?.[i],
+            c: ohlcv.close?.[i],
+            v: ohlcv.volume?.[i] || 0,
+          }))
+          .filter(d => d.c != null && d.o != null)
+          .slice(-120);
+
+        if (!data.length) throw new Error("No valid candles in response");
+
+        setCandles(data);
+        const prev = meta.chartPreviousClose || meta.previousClose || data[data.length - 2]?.c || data[data.length - 1].c;
+        const curr = meta.regularMarketPrice || data[data.length - 1].c;
+        setQuote({
+          c: curr,
+          h: meta.regularMarketDayHigh,
+          l: meta.regularMarketDayLow,
+          o: meta.regularMarketOpen,
+          dp: ((curr - prev) / prev * 100),
+          d:  curr - prev,
+        });
+        setLoading(false);
+      })
+      .catch(e => { setError("Yahoo Finance fetch failed: " + e.message); setLoading(false); });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [symbol, interval]);
+
+  const fmtP = (n) => n == null ? "--" : n >= 1000 ? n.toLocaleString("en-IN", { maximumFractionDigits: 2 }) : n.toFixed(2);
+  const isUp = quote ? quote.dp >= 0 : true;
+  const last = candles?.[candles.length - 1];
+  const first = candles?.[0];
+  const periodReturn = (last && first) ? ((last.c - first.c) / first.c * 100).toFixed(2) : null;
+
+  return (
+    <div className="glass-card" style={{ padding: "16px 16px 10px" }}>
+      {/* Header row */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--cyan)", fontWeight: 700 }}>{symbol}</div>
+          {quote && (
+            <>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 22, fontWeight: 700, color: isUp ? "var(--green)" : "var(--red)", lineHeight: 1 }}>
+                {fmtP(quote.c)}
+              </div>
+              <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: isUp ? "var(--green)" : "var(--red)" }}>
+                {isUp ? "▲" : "▼"}{Math.abs(quote.dp).toFixed(2)}% &nbsp;({quote.d >= 0 ? "+" : ""}{fmtP(quote.d)})
+              </div>
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <div style={{ width: 7, height: 7, borderRadius: "50%", background: "#0ECC6D", boxShadow: "0 0 6px #0ECC6D", animation: "pulse 2s infinite" }} />
+          <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "#0ECC6D", letterSpacing: 2 }}>YAHOO FINANCE · LIVE · NO API KEY</span>
+        </div>
+      </div>
+
+      {/* OHLC mini stats */}
+      {quote && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          {[["Open", quote.o], ["High", quote.h], ["Low", quote.l]].map(([l, v]) => (
+            <div key={l} style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)" }}>
+              {l}: <span style={{ color: "var(--text)" }}>{fmtP(v)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && (
+        <div style={{ height: 380, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+          <div className="spin" style={{ width: 36, height: 36, border: "3px solid rgba(14,204,109,0.1)", borderTopColor: "#0ECC6D", borderRadius: "50%" }} />
+          <div style={{ fontFamily: "var(--gothic)", fontSize: 11, color: "#0ECC6D", letterSpacing: 2 }}>LOADING FROM YAHOO FINANCE...</div>
+        </div>
+      )}
+
+      {/* Error */}
+      {error && !loading && (
+        <div style={{ padding: "30px 20px", textAlign: "center", color: "var(--red)", fontFamily: "var(--mono)", fontSize: 12 }}>⚠ {error}</div>
+      )}
+
+      {/* Chart */}
+      {candles && !loading && (
+        <>
+          <CandlestickSVG data={candles} width={1100} height={340} />
+          <VolumeSVG data={candles} width={1100} height={56} />
+          <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+            {(() => {
+              const l = candles[candles.length - 1];
+              return [["Open",l.o],["High",l.h],["Low",l.l],["Close",l.c],["Volume",l.v ? (l.v/1e6).toFixed(2)+"M":"--"]].map(([lbl,v])=>(
+                <div key={lbl} style={{ background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"6px 12px",textAlign:"center" }}>
+                  <div style={{ fontFamily:"var(--gothic)",fontSize:8,color:"var(--text-dim)",letterSpacing:1.5 }}>{lbl}</div>
+                  <div style={{ fontFamily:"var(--mono)",fontSize:11,color:"var(--text)",fontWeight:600,marginTop:3 }}>{typeof v==="number"?fmtP(v):v}</div>
+                </div>
+              ));
+            })()}
+            {periodReturn && (
+              <div style={{ background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"6px 12px",textAlign:"center" }}>
+                <div style={{ fontFamily:"var(--gothic)",fontSize:8,color:"var(--text-dim)",letterSpacing:1.5 }}>PERIOD</div>
+                <div style={{ fontFamily:"var(--mono)",fontSize:11,fontWeight:600,marginTop:3,color:parseFloat(periodReturn)>=0?"var(--green)":"var(--red)" }}>
+                  {parseFloat(periodReturn)>=0?"+":""}{periodReturn}%
+                </div>
+              </div>
+            )}
+            <div style={{ marginLeft:"auto",display:"flex",alignItems:"center",fontFamily:"var(--mono)",fontSize:9,color:"var(--text-dim)" }}>
+              {candles.length} candles · 🟢 Yahoo Finance
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 function TradingViewWidget({ symbol, interval = "D" }) {
   const containerRef = useRef(null);
 
@@ -7319,9 +7486,6 @@ function TradingJournalMain() {
       <AmbientBackground />
 
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
-
-        {/* ── TICKER TAPE ── */}
-        <FinnhubTickerTape apiKey={settings.finnhubKey || ""} />
 
         {/* ── HEADER ── */}
         <header style={{
