@@ -5217,9 +5217,11 @@ function FinnhubChartTab({ apiKey }) {
   const doSearch = async () => {
     if (!input.trim()) return;
     if (chartMode === "tv") {
-      // In TV mode, just set the symbol directly — TV widget handles it
+      // In TV mode — navigate directly to TradingView, no popup/notification
       const cleaned = input.trim().toUpperCase();
-      setSym(cleaned); setInput(""); setSearchResults([]);
+      const tvSym = cleaned.replace(/_/g, "");
+      window.location.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}`;
+      setInput("");
       return;
     }
     if (!apiKey) return;
@@ -5369,17 +5371,18 @@ function FinnhubChartTab({ apiKey }) {
             </div>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               {FH_CATEGORIES[cat]?.map(([s, label]) => (
-                <button key={s} onClick={() => setSym(s)} style={{
+                <button key={s} onClick={() => {
+                  const tvSym = s.replace(/_/g, "");
+                  window.location.href = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSym)}`;
+                }} style={{
                   padding: "4px 12px", borderRadius: 7, border: "none", cursor: "pointer",
                   fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .12s",
-                  background: sym === s ? "linear-gradient(135deg,rgba(0,212,255,0.22),rgba(0,212,255,0.08))" : "rgba(255,255,255,0.04)",
-                  color: sym === s ? "var(--cyan)" : "var(--text)",
-                  boxShadow: sym === s ? "0 0 0 1px rgba(0,212,255,0.3)" : "none",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "var(--text)",
                 }}>{label}</button>
               ))}
             </div>
           </div>
-          <TradingViewWidget symbol={sym} interval={res} />
         </>
       )}
 
@@ -7487,85 +7490,42 @@ function TradingJournalMain() {
 
       <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", position: "relative", zIndex: 1 }}>
 
-        {/* ── HEADER ── */}
-        <header style={{
+        {/* ── COMPACT NAV BAR (no Finnhub header) ── */}
+        <div style={{
           background: "rgba(3,3,9,0.92)",
-          borderBottom: "1px solid rgba(0,212,255,0.1)",
+          borderBottom: "1px solid rgba(232,184,75,0.1)",
           backdropFilter: "blur(24px)",
           WebkitBackdropFilter: "blur(24px)",
-          padding: "0 20px",
+          padding: "6px 16px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          height: 60,
           position: "sticky",
           top: 0,
           zIndex: 100,
-          boxShadow: "0 1px 0 rgba(0,212,255,0.06), 0 4px 24px rgba(0,0,0,0.5)",
+          flexWrap: "wrap",
+          gap: 6,
         }}>
-          {/* Left: Logo + Nav */}
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 9, marginRight: 4 }}>
-              <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, rgba(232,184,75,0.25), rgba(0,220,255,0.1))", border: "1px solid rgba(232,184,75,0.4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, boxShadow: "0 2px 16px rgba(232,184,75,0.2), 0 0 0 1px rgba(0,220,255,0.08)" }}>◈</div>
-              <div>
-                <div style={{ fontFamily: "var(--decorative)", fontSize: 15, letterSpacing: .5, lineHeight: 1.1 }}>
-                  <span style={{ color: "var(--gold)" }}>Trading</span>
-                  <span style={{ color: "var(--cyan)", marginLeft: 4 }}>Journal</span>
-                </div>
-                <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", marginTop: 1, letterSpacing: 2.5, textTransform: "uppercase" }}>
-                  {settings.name ? settings.name : "Pro Edition"} · <span style={{ color: "var(--gold-dim)" }}>{settings.exchange || "NSE"}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Nav */}
-            <nav style={{ display: "flex", gap: 1, background: "rgba(255,255,255,0.025)", borderRadius: 12, padding: 3, border: "1px solid var(--border)" }}>
-              {TABS.map(t => (
-                <button key={t.id} onClick={() => setTab(t.id)} className="nav-tab" style={{
-                  background: tab === t.id ? "linear-gradient(135deg, rgba(232,184,75,0.15), rgba(0,220,255,0.08))" : "transparent",
-                  color: tab === t.id ? "var(--gold)" : "var(--text-dim)",
-                  border: tab === t.id ? "1px solid rgba(232,184,75,0.25)" : "1px solid transparent",
-                  borderRadius: 9, padding: "5px 12px",
-                  fontFamily: "var(--gothic)", fontWeight: tab === t.id ? 700 : 400,
-                  fontSize: 10.5, cursor: "pointer", transition: "all .2s",
-                  display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
-                  letterSpacing: ".8px", textTransform: "uppercase",
-                  boxShadow: tab === t.id ? "0 2px 10px rgba(232,184,75,0.12)" : "none",
-                }}>
-                  <span style={{ opacity: .85 }}>{t.icon}</span> {t.label}
-                </button>
-              ))}
-            </nav>
-          </div>
-
-          {/* Right: Stats + Market Status + CTA */}
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <StreakBadge trades={trades} />
-
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", letterSpacing: 2, textTransform: "uppercase" }}>Net P&L</div>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 16, fontWeight: 700, color: totalNet >= 0 ? "var(--green)" : "var(--red)", letterSpacing: -.5 }}>{fmt(totalNet)}</div>
-            </div>
-
-            <div style={{ width: 1, height: 28, background: "var(--border)" }} />
-
-            <div style={{ textAlign: "right" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 5, justifyContent: "flex-end" }}>
-                <div className={isMarketOpen() ? "blink" : ""} style={{ width: 7, height: 7, borderRadius: "50%", background: isMarketOpen() ? "var(--green)" : "#444", boxShadow: isMarketOpen() ? "0 0 8px var(--green)" : "none" }} />
-                <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: isMarketOpen() ? "var(--green)" : "var(--text-dim)", fontWeight: 600, letterSpacing: 1.5 }}>
-                  {isMarketOpen() ? "MARKET OPEN" : "CLOSED"}
-                </span>
-              </div>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)", marginTop: 1 }}>
-                {time.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })} IST
-              </div>
-            </div>
-
-            <button className="btn-gold" onClick={() => setShowForm(true)} style={{ padding: "8px 18px", flexShrink: 0, fontSize: 11 }}>
-              ✦ Log Trade
-            </button>
-          </div>
-        </header>
+          <nav style={{ display: "flex", gap: 2, flexWrap: "wrap", background: "rgba(255,255,255,0.025)", borderRadius: 10, padding: 3, border: "1px solid var(--border)" }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)} className="nav-tab" style={{
+                background: tab === t.id ? "linear-gradient(135deg, rgba(232,184,75,0.15), rgba(0,220,255,0.08))" : "transparent",
+                color: tab === t.id ? "var(--gold)" : "var(--text-dim)",
+                border: tab === t.id ? "1px solid rgba(232,184,75,0.25)" : "1px solid transparent",
+                borderRadius: 7, padding: "4px 10px",
+                fontFamily: "var(--gothic)", fontWeight: tab === t.id ? 700 : 400,
+                fontSize: 10, cursor: "pointer", transition: "all .2s",
+                display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
+                letterSpacing: ".8px", textTransform: "uppercase",
+              }}>
+                <span style={{ opacity: .85 }}>{t.icon}</span> {t.label}
+              </button>
+            ))}
+          </nav>
+          <button className="btn-gold" onClick={() => setShowForm(true)} style={{ padding: "6px 14px", flexShrink: 0, fontSize: 11 }}>
+            ✦ Log Trade
+          </button>
+        </div>
 
         {/* ── MAIN CONTENT ── */}
         <main style={{ flex: 1, padding: "24px 24px", maxWidth: 1540, width: "100%", margin: "0 auto", boxSizing: "border-box" }}>
