@@ -4918,7 +4918,74 @@ function VolumeSVG({ data, width = 900, height = 60 }) {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   CHART TAB — 100% Finnhub powered
+   TRADINGVIEW EMBEDDED WIDGET — free official embed, no redirect
+═══════════════════════════════════════════════════════════════ */
+function TradingViewWidget({ symbol, interval = "D" }) {
+  const containerRef = useRef(null);
+
+  // Finnhub → TradingView symbol conversion
+  const toTVSymbol = (s) => s.replace(/_/g, ""); // OANDA:USD_INR → OANDA:USDINR
+
+  // Finnhub interval → TradingView interval (same notation, just pass through)
+  const tvInterval = interval === "240" ? "240" : interval;
+  const tvSymbol   = toTVSymbol(symbol);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    containerRef.current.innerHTML = "";
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "tradingview-widget-container__widget";
+    wrapper.style.cssText = "height:100%;width:100%;";
+    containerRef.current.appendChild(wrapper);
+
+    const script = document.createElement("script");
+    script.type  = "text/javascript";
+    script.src   = "https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js";
+    script.async = true;
+    script.innerHTML = JSON.stringify({
+      autosize: true,
+      symbol: tvSymbol,
+      interval: tvInterval,
+      timezone: "Asia/Kolkata",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      withdateranges: true,
+      hide_side_toolbar: false,
+      allow_symbol_change: true,
+      save_image: false,
+      calendar: false,
+      hide_volume: false,
+      support_host: "https://www.tradingview.com",
+    });
+    containerRef.current.appendChild(script);
+
+    return () => { if (containerRef.current) containerRef.current.innerHTML = ""; };
+  }, [tvSymbol, tvInterval]);
+
+  return (
+    <div style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid rgba(0,212,255,0.15)" }}>
+      <div
+        ref={containerRef}
+        className="tradingview-widget-container"
+        style={{ height: 540, width: "100%" }}
+      />
+      <div style={{
+        position: "absolute", bottom: 0, right: 0, left: 0,
+        background: "linear-gradient(transparent, rgba(3,3,9,0.92))",
+        padding: "6px 12px", display: "flex", alignItems: "center", gap: 6,
+        fontFamily: "var(--mono)", fontSize: 9, color: "rgba(0,212,255,0.35)",
+        pointerEvents: "none",
+      }}>
+        <span>📺 TradingView Advanced Chart — use the built-in search bar to find any of 100k+ symbols</span>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHART TAB — Finnhub + TradingView dual-mode
 ═══════════════════════════════════════════════════════════════ */
 const FH_CATEGORIES = {
   "🇺🇸 US Tech":   [["AAPL","Apple"],["MSFT","Microsoft"],["GOOGL","Google"],["NVDA","NVIDIA"],["TSLA","Tesla"],["AMZN","Amazon"],["META","Meta"],["NFLX","Netflix"]],
@@ -4938,19 +5005,21 @@ const FH_RESOLUTIONS = [
 ];
 
 function FinnhubChartTab({ apiKey }) {
-  const [sym, setSym]         = useState("AAPL");
-  const [res, setRes]         = useState("D");
-  const [candles, setCandles] = useState(null);
-  const [quote, setQuote]     = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState("");
-  const [cat, setCat]         = useState("🇺🇸 US Tech");
-  const [input, setInput]     = useState("");
+  const [sym, setSym]           = useState("NSE:RELIANCE");
+  const [res, setRes]           = useState("D");
+  const [candles, setCandles]   = useState(null);
+  const [quote, setQuote]       = useState(null);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState("");
+  const [cat, setCat]           = useState("🇮🇳 NSE Blue");
+  const [input, setInput]       = useState("");
   const [searchResults, setSearchResults] = useState([]);
-  const [metrics, setMetrics] = useState(null);
+  const [metrics, setMetrics]   = useState(null);
+  // "finnhub" = custom SVG chart  |  "tv" = TradingView embedded widget
+  const [chartMode, setChartMode] = useState("tv");
 
   const loadChart = useCallback(async (symbol, resolution) => {
-    if (!apiKey) { setError("Add your Finnhub API key in Settings first."); return; }
+    if (!apiKey) return;
     setLoading(true); setError(""); setCandles(null); setMetrics(null);
     const r = FH_RESOLUTIONS.find(r => r.val === resolution) || FH_RESOLUTIONS[6];
     const to = Math.floor(Date.now() / 1000);
@@ -4964,21 +5033,29 @@ function FinnhubChartTab({ apiKey }) {
       const data = c.t.map((ts, i) => ({
         date: new Date(ts * 1000).toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
         o: c.o[i], h: c.h[i], l: c.l[i], c: c.c[i], v: c.v?.[i] || 0,
-      })).slice(-120); // max 120 candles
-      setCandles(data);
-      setQuote(q);
-      setMetrics(m?.metric || null);
+      })).slice(-120);
+      setCandles(data); setQuote(q); setMetrics(m?.metric || null);
     } else {
-      setError(`No candle data for "${symbol}". Try a different symbol or timeframe.`);
+      setError(`Finnhub has no candle data for "${symbol}" — auto-switched to TradingView.`);
+      setChartMode("tv"); // ← AUTO FALLBACK
     }
     setLoading(false);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKey]);
 
-  useEffect(() => { loadChart(sym, res); }, [sym, res, loadChart]);
+  useEffect(() => {
+    if (chartMode === "finnhub" && apiKey) loadChart(sym, res);
+  }, [sym, res, chartMode, loadChart, apiKey]);
 
   const doSearch = async () => {
-    if (!input.trim() || !apiKey) return;
+    if (!input.trim()) return;
+    if (chartMode === "tv") {
+      // In TV mode, just set the symbol directly — TV widget handles it
+      const cleaned = input.trim().toUpperCase();
+      setSym(cleaned); setInput(""); setSearchResults([]);
+      return;
+    }
+    if (!apiKey) return;
     const d = await FH.search(input.trim(), apiKey);
     if (d?.result) setSearchResults(d.result.slice(0, 8));
   };
@@ -4991,94 +5068,79 @@ function FinnhubChartTab({ apiKey }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {!apiKey && (
-        <div className="glass-card" style={{ borderColor: "var(--gold)", padding: "20px 24px", textAlign: "center" }}>
-          <div style={{ fontSize: 32, marginBottom: 10 }}>🔑</div>
-          <div style={{ fontFamily: "var(--serif)", fontSize: 18, color: "var(--text)", marginBottom: 8 }}>Finnhub API Key Required</div>
-          <div style={{ fontFamily: "var(--sans)", fontSize: 13, color: "var(--text-dim)" }}>Go to <strong style={{ color: "var(--gold)" }}>Settings</strong> and paste your free Finnhub key to unlock live candlestick charts.</div>
+
+      {/* ── TOP BAR ── */}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+
+        {/* Chart Mode Toggle */}
+        <div style={{ display: "flex", borderRadius: 8, overflow: "hidden", border: "1px solid rgba(0,212,255,0.25)", flexShrink: 0 }}>
+          {[["tv","📺 TradingView"],["finnhub","📊 Finnhub SVG"]].map(([mode, label]) => (
+            <button key={mode} onClick={() => { setChartMode(mode); if (mode === "finnhub" && apiKey) loadChart(sym, res); }}
+              style={{
+                padding: "8px 16px", border: "none", cursor: "pointer",
+                fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700, transition: "all .15s",
+                background: chartMode === mode
+                  ? (mode === "tv" ? "rgba(0,212,255,0.2)" : "rgba(232,184,75,0.2)")
+                  : "rgba(255,255,255,0.04)",
+                color: chartMode === mode
+                  ? (mode === "tv" ? "var(--cyan)" : "var(--gold)")
+                  : "var(--text-dim)",
+              }}>{label}</button>
+          ))}
+        </div>
+
+        {/* Symbol search */}
+        <div style={{ display: "flex", gap: 6, flex: 1, minWidth: 240 }}>
+          <input
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && doSearch()}
+            placeholder={chartMode === "tv"
+              ? "Type any symbol → Enter  (e.g. NIFTY, RELIANCE, EURUSD, BTCUSDT)"
+              : "Search Finnhub symbol (AAPL, NSE:RELIANCE)..."}
+            style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 12 }}
+          />
+          <button className="btn-gold" onClick={doSearch} style={{ padding: "6px 16px", fontSize: 11, flexShrink: 0 }}>🔍 GO</button>
+        </div>
+
+        {/* Live quote badge (Finnhub mode) */}
+        {quote && chartMode === "finnhub" && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 14px", borderRadius: 8, background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)" }}>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)" }}>{sym}</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 16, fontWeight: 700, color: isUp ? "var(--green)" : "var(--red)" }}>{fmtP(quote.c)}</span>
+            <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: isUp ? "var(--green)" : "var(--red)" }}>
+              {isUp ? "▲" : "▼"}{Math.abs(quote.dp).toFixed(2)}%
+            </span>
+          </div>
+        )}
+
+        {/* Current symbol display (TV mode) */}
+        {chartMode === "tv" && (
+          <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)", padding: "6px 14px", borderRadius: 8, background: "rgba(0,212,255,0.06)", border: "1px solid rgba(0,212,255,0.15)" }}>
+            📺 {sym}
+          </div>
+        )}
+      </div>
+
+      {/* ── SEARCH RESULTS (Finnhub mode) ── */}
+      {searchResults.length > 0 && chartMode === "finnhub" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 160, overflowY: "auto", padding: "8px", background: "rgba(255,255,255,0.03)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          {searchResults.map((r, i) => (
+            <div key={i} onClick={() => { setSym(r.symbol); setInput(""); setSearchResults([]); }}
+              style={{ display: "flex", justifyContent: "space-between", padding: "5px 10px", borderRadius: 6, cursor: "pointer", border: "1px solid var(--border)", background: "rgba(0,0,0,0.2)" }}
+              onMouseEnter={e => e.currentTarget.style.background = "rgba(0,212,255,0.08)"}
+              onMouseLeave={e => e.currentTarget.style.background = "rgba(0,0,0,0.2)"}
+            >
+              <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{r.symbol}</span>
+              <span style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description}</span>
+            </div>
+          ))}
         </div>
       )}
 
-      {apiKey && (
+      {/* ── RESOLUTION + CATEGORY (Finnhub mode only) ── */}
+      {chartMode === "finnhub" && (
         <>
-          {/* Top bar — symbol info + search */}
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
-            {/* Current symbol quote */}
-            <div className="glass-card" style={{ flex: "0 0 auto", minWidth: 220, padding: "14px 20px" }}>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text-dim)", marginBottom: 4 }}>{sym}</div>
-              {quote ? (
-                <>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: 28, fontWeight: 700, color: isUp ? "var(--green)" : "var(--red)", lineHeight: 1 }}>{fmtP(quote.c)}</div>
-                  <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: isUp ? "var(--green)" : "var(--red)", marginTop: 6 }}>
-                    {isUp ? "▲" : "▼"} {Math.abs(quote.dp).toFixed(2)}% ({quote.d >= 0 ? "+" : ""}{fmtP(quote.d)})
-                  </div>
-                  <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                    {[["H", quote.h], ["L", quote.l], ["O", quote.o]].map(([l, v]) => (
-                      <div key={l} style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)" }}>{l}: <span style={{ color: "var(--text)" }}>{fmtP(v)}</span></div>
-                    ))}
-                  </div>
-                </>
-              ) : loading ? <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>Loading...</div> : <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text-dim)" }}>No data</div>}
-            </div>
-
-            {/* Period return */}
-            {periodReturn && (
-              <div className="glass-card" style={{ flex: "0 0 auto", padding: "14px 20px", textAlign: "center", minWidth: 110 }}>
-                <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 6 }}>PERIOD</div>
-                <div style={{ fontFamily: "var(--mono)", fontSize: 20, fontWeight: 700, color: parseFloat(periodReturn) >= 0 ? "var(--green)" : "var(--red)" }}>
-                  {parseFloat(periodReturn) >= 0 ? "+" : ""}{periodReturn}%
-                </div>
-              </div>
-            )}
-
-            {/* Fundamentals if available */}
-            {metrics && (
-              <div className="glass-card" style={{ flex: 1, padding: "14px 18px" }}>
-                <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 8 }}>KEY METRICS</div>
-                <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-                  {[
-                    ["P/E", metrics["peExclExtraTTM"]],
-                    ["EPS", metrics["epsExclExtraItemsTTM"]],
-                    ["52W High", metrics["52WeekHigh"]],
-                    ["52W Low", metrics["52WeekLow"]],
-                    ["Div Yield", metrics["dividendYieldIndicatedAnnual"] ? metrics["dividendYieldIndicatedAnnual"] + "%" : null],
-                    ["Beta", metrics["beta"]],
-                  ].filter(([, v]) => v != null).map(([l, v]) => (
-                    <div key={l}>
-                      <div style={{ fontFamily: "var(--sans)", fontSize: 9, color: "var(--text-dim)" }}>{l}</div>
-                      <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "var(--text)", fontWeight: 600 }}>{typeof v === "number" ? v.toFixed(2) : v}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Symbol search */}
-            <div className="glass-card" style={{ flex: "0 0 auto", padding: "14px 18px", minWidth: 260 }}>
-              <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5, marginBottom: 8 }}>SEARCH SYMBOL</div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && doSearch()}
-                  placeholder="AAPL, TSLA, NSE:RELIANCE..." style={{ flex: 1, fontFamily: "var(--mono)", fontSize: 12 }} />
-                <button className="btn-gold" onClick={doSearch} style={{ padding: "6px 14px", fontSize: 11 }}>🔍</button>
-              </div>
-              {searchResults.length > 0 && (
-                <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4, maxHeight: 140, overflowY: "auto" }}>
-                  {searchResults.map((r, i) => (
-                    <div key={i} onClick={() => { setSym(r.symbol); setInput(""); setSearchResults([]); }}
-                      style={{ display: "flex", justifyContent: "space-between", padding: "5px 8px", borderRadius: 6, cursor: "pointer", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)" }}
-                      onMouseEnter={e => e.currentTarget.style.background = "rgba(0,212,255,0.08)"}
-                      onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,0.04)"}
-                    >
-                      <span style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--cyan)" }}>{r.symbol}</span>
-                      <span style={{ fontFamily: "var(--sans)", fontSize: 10, color: "var(--text-dim)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.description}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Resolution selector */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <span style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>TIMEFRAME:</span>
             <div style={{ display: "flex", gap: 3, background: "rgba(255,255,255,0.03)", padding: 3, borderRadius: 8, border: "1px solid var(--border)" }}>
@@ -5092,31 +5154,25 @@ function FinnhubChartTab({ apiKey }) {
                 }}>{r.label}</button>
               ))}
             </div>
-            <div style={{ height: 1, flex: 1, background: "var(--border)" }} />
-            <div style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 8, height: 2, background: "rgba(255,200,0,0.6)", display: "inline-block" }} />SMA 20
-            </div>
-            <button className="btn-ghost" onClick={() => loadChart(sym, res)} style={{ fontSize: 10, padding: "4px 12px" }}>⟳ Refresh</button>
+            {!apiKey && <span style={{ fontFamily: "var(--mono)", fontSize: 10, color: "var(--gold)" }}>⚠ Add Finnhub key in Settings</span>}
+            <button className="btn-ghost" onClick={() => loadChart(sym, res)} style={{ fontSize: 10, padding: "4px 12px", marginLeft: "auto" }}>⟳ Refresh</button>
           </div>
-
-          {/* Category quick select */}
-          <div className="glass-card" style={{ padding: "12px 16px" }}>
-            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+          <div className="glass-card" style={{ padding: "10px 14px" }}>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
               <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 1.5 }}>CATEGORY:</span>
               {Object.keys(FH_CATEGORIES).map(c => (
                 <button key={c} onClick={() => setCat(c)} style={{
-                  padding: "3px 12px", borderRadius: 20, border: "none", cursor: "pointer",
+                  padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer",
                   fontFamily: "var(--sans)", fontSize: 10, transition: "all .12s",
                   background: cat === c ? "rgba(0,212,255,0.14)" : "rgba(255,255,255,0.04)",
                   color: cat === c ? "var(--cyan)" : "var(--text-dim)",
-                  boxShadow: cat === c ? "0 0 0 1px rgba(0,212,255,0.25)" : "none",
                 }}>{c}</button>
               ))}
             </div>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               {FH_CATEGORIES[cat]?.map(([s, label]) => (
                 <button key={s} onClick={() => setSym(s)} style={{
-                  padding: "5px 14px", borderRadius: 7, border: "none", cursor: "pointer",
+                  padding: "4px 12px", borderRadius: 7, border: "none", cursor: "pointer",
                   fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .12s",
                   background: sym === s ? "linear-gradient(135deg,rgba(232,184,75,0.22),rgba(232,184,75,0.08))" : "rgba(255,255,255,0.04)",
                   color: sym === s ? "var(--gold)" : "var(--text)",
@@ -5125,45 +5181,107 @@ function FinnhubChartTab({ apiKey }) {
               ))}
             </div>
           </div>
-
-          {/* Chart area */}
-          <div className="glass-card" style={{ padding: "16px 16px 8px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-              <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--cyan)", fontWeight: 700 }}>{sym}</div>
-              <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2 }}>FINNHUB · {FH_RESOLUTIONS.find(r => r.val === res)?.label} · CANDLESTICK + SMA20 + VOLUME</div>
-            </div>
-            {loading && (
-              <div style={{ height: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
-                <div className="spin" style={{ width: 36, height: 36, border: "3px solid rgba(0,212,255,0.1)", borderTopColor: "var(--cyan)", borderRadius: "50%" }} />
-                <div style={{ fontFamily: "var(--gothic)", fontSize: 11, color: "var(--cyan)", letterSpacing: 2 }}>FETCHING CANDLES FROM FINNHUB...</div>
-              </div>
-            )}
-            {error && !loading && (
-              <div style={{ padding: "40px 20px", textAlign: "center", color: "var(--red)", fontFamily: "var(--mono)", fontSize: 12 }}>⚠ {error}</div>
-            )}
-            {candles && !loading && (
-              <>
-                <CandlestickSVG data={candles} width={1100} height={340} />
-                <VolumeSVG data={candles} width={1100} height={56} />
-                <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-                  {candles.length > 0 && (() => {
-                    const last = candles[candles.length - 1];
-                    return [["Open",last.o],["High",last.h],["Low",last.l],["Close",last.c],["Volume",last.v ? (last.v / 1e6).toFixed(2) + "M" : "--"]].map(([l, v]) => (
-                      <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 7, padding: "6px 12px", textAlign: "center" }}>
-                        <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", letterSpacing: 1.5 }}>{l}</div>
-                        <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text)", fontWeight: 600, marginTop: 3 }}>{typeof v === "number" ? fmtP(v) : v}</div>
-                      </div>
-                    ));
-                  })()}
-                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)" }}>
-                    {candles.length} candles · ⚡ Finnhub
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
         </>
       )}
+
+      {/* ── TRADINGVIEW WIDGET ── */}
+      {chartMode === "tv" && (
+        <>
+          {/* Quick-access buttons for TV mode */}
+          <div className="glass-card" style={{ padding: "10px 14px" }}>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 9, color: "var(--cyan)", letterSpacing: 1.5 }}>QUICK SELECT:</span>
+              {Object.keys(FH_CATEGORIES).map(c => (
+                <button key={c} onClick={() => setCat(c)} style={{
+                  padding: "3px 10px", borderRadius: 20, border: "none", cursor: "pointer",
+                  fontFamily: "var(--sans)", fontSize: 10, transition: "all .12s",
+                  background: cat === c ? "rgba(0,212,255,0.14)" : "rgba(255,255,255,0.04)",
+                  color: cat === c ? "var(--cyan)" : "var(--text-dim)",
+                }}>{c}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {FH_CATEGORIES[cat]?.map(([s, label]) => (
+                <button key={s} onClick={() => setSym(s)} style={{
+                  padding: "4px 12px", borderRadius: 7, border: "none", cursor: "pointer",
+                  fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, transition: "all .12s",
+                  background: sym === s ? "linear-gradient(135deg,rgba(0,212,255,0.22),rgba(0,212,255,0.08))" : "rgba(255,255,255,0.04)",
+                  color: sym === s ? "var(--cyan)" : "var(--text)",
+                  boxShadow: sym === s ? "0 0 0 1px rgba(0,212,255,0.3)" : "none",
+                }}>{label}</button>
+              ))}
+            </div>
+          </div>
+          <TradingViewWidget symbol={sym} interval={res} />
+        </>
+      )}
+
+      {/* ── FINNHUB CHART ── */}
+      {chartMode === "finnhub" && (
+        <div className="glass-card" style={{ padding: "16px 16px 8px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontFamily: "var(--mono)", fontSize: 13, color: "var(--cyan)", fontWeight: 700 }}>{sym}</div>
+            <div style={{ fontFamily: "var(--gothic)", fontSize: 9, color: "var(--text-dim)", letterSpacing: 2 }}>
+              FINNHUB · {FH_RESOLUTIONS.find(r => r.val === res)?.label} · CANDLESTICK + SMA20 + VOLUME
+            </div>
+          </div>
+          {loading && (
+            <div style={{ height: 400, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16 }}>
+              <div className="spin" style={{ width: 36, height: 36, border: "3px solid rgba(0,212,255,0.1)", borderTopColor: "var(--cyan)", borderRadius: "50%" }} />
+              <div style={{ fontFamily: "var(--gothic)", fontSize: 11, color: "var(--cyan)", letterSpacing: 2 }}>FETCHING CANDLES FROM FINNHUB...</div>
+            </div>
+          )}
+          {error && !loading && (
+            <div style={{ padding: "30px 20px", textAlign: "center" }}>
+              <div style={{ color: "var(--gold)", fontFamily: "var(--mono)", fontSize: 12, marginBottom: 12 }}>⚠ {error}</div>
+              <button onClick={() => setChartMode("tv")} style={{
+                padding: "8px 20px", borderRadius: 8, border: "1px solid rgba(0,212,255,0.3)",
+                background: "rgba(0,212,255,0.1)", color: "var(--cyan)", cursor: "pointer",
+                fontFamily: "var(--mono)", fontSize: 11, fontWeight: 700,
+              }}>📺 Open in TradingView (embedded)</button>
+            </div>
+          )}
+          {candles && !loading && (
+            <>
+              <CandlestickSVG data={candles} width={1100} height={340} />
+              <VolumeSVG data={candles} width={1100} height={56} />
+              <div style={{ display: "flex", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+                {(() => {
+                  const last = candles[candles.length - 1];
+                  return [["Open",last.o],["High",last.h],["Low",last.l],["Close",last.c],["Volume",last.v ? (last.v / 1e6).toFixed(2) + "M" : "--"]].map(([l, v]) => (
+                    <div key={l} style={{ background: "rgba(255,255,255,0.03)", borderRadius: 7, padding: "6px 12px", textAlign: "center" }}>
+                      <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", letterSpacing: 1.5 }}>{l}</div>
+                      <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text)", fontWeight: 600, marginTop: 3 }}>{typeof v === "number" ? fmtP(v) : v}</div>
+                    </div>
+                  ));
+                })()}
+                {periodReturn && (
+                  <div style={{ background: "rgba(255,255,255,0.03)", borderRadius: 7, padding: "6px 12px", textAlign: "center" }}>
+                    <div style={{ fontFamily: "var(--gothic)", fontSize: 8, color: "var(--text-dim)", letterSpacing: 1.5 }}>PERIOD</div>
+                    <div style={{ fontFamily: "var(--mono)", fontSize: 11, fontWeight: 600, marginTop: 3, color: parseFloat(periodReturn) >= 0 ? "var(--green)" : "var(--red)" }}>
+                      {parseFloat(periodReturn) >= 0 ? "+" : ""}{periodReturn}%
+                    </div>
+                  </div>
+                )}
+                <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", fontFamily: "var(--mono)", fontSize: 9, color: "var(--text-dim)" }}>
+                  {candles.length} candles · ⚡ Finnhub
+                </div>
+              </div>
+              {metrics && (
+                <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 12, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+                  {[["P/E",metrics["peExclExtraTTM"]],["EPS",metrics["epsExclExtraItemsTTM"]],["52W High",metrics["52WeekHigh"]],["52W Low",metrics["52WeekLow"]],["Beta",metrics["beta"]]].filter(([,v])=>v!=null).map(([l,v])=>(
+                    <div key={l}>
+                      <div style={{ fontFamily: "var(--sans)", fontSize: 9, color: "var(--text-dim)" }}>{l}</div>
+                      <div style={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--text)", fontWeight: 600 }}>{typeof v === "number" ? v.toFixed(2) : v}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
     </div>
   );
 }
